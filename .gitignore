@@ -1,0 +1,23 @@
+# Python deps populated by `uv pip install --target deps`
+# (rebuildable from pyproject.toml; too large for source history)
+deps/
+
+# Local venv
+.venv/
+__pycache__/
+*.pyc
+.ruff_cache/
+.ty_cache/
+
+# UI build artifacts + dependencies
+ui/node_modules/
+ui/dist/
+ui/.vite/
+
+# Platform workspace data (cloned repo, credentials)
+.nimblebrain/
+
+# Local env
+.env
+.env.*
+!.env.example

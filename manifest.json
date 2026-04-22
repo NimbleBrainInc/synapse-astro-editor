@@ -1,0 +1,118 @@
+{
+  "manifest_version": "0.4",
+  "name": "@nimblebraininc/synapse-astro-editor",
+  "version": "0.1.0",
+  "description": "Natural-language editor for Astro websites. Point it at a GitHub repo; the NimbleBrain chat drives edits via MCP tools. An internal Astro dev subprocess renders the site, and a flattened live preview is served through the MCP Apps ui:// resource spec.",
+  "author": {
+    "name": "NimbleBrain Inc",
+    "email": "hello@nimblebrain.ai"
+  },
+  "server": {
+    "type": "python",
+    "entry_point": "mcp_astro_editor.server",
+    "mcp_config": {
+      "command": "python",
+      "args": [
+        "-m",
+        "mcp_astro_editor.server"
+      ],
+      "env": {
+        "GITHUB_REPO_URL": "${user_config.github_repo_url}",
+        "GITHUB_TOKEN": "${user_config.github_token}",
+        "DRAFT_BRANCH": "${user_config.draft_branch}",
+        "BASE_BRANCH": "${user_config.base_branch}",
+        "PUBLISH_MODE": "${user_config.publish_mode}"
+      }
+    }
+  },
+  "user_config": {
+    "github_repo_url": {
+      "type": "string",
+      "title": "GitHub repository URL",
+      "description": "HTTPS URL of the Astro site repo, e.g. https://github.com/you/my-site",
+      "required": true
+    },
+    "github_token": {
+      "type": "string",
+      "title": "GitHub personal access token",
+      "description": "Fine-grained PAT with Contents: Read & Write (and Pull requests: Read & Write if auto-opening PRs).",
+      "sensitive": true,
+      "required": true
+    },
+    "draft_branch": {
+      "type": "string",
+      "title": "Draft branch",
+      "description": "Branch the editor commits to. Publish pushes this branch and opens a PR against the base branch.",
+      "default": "astro-editor/draft",
+      "required": false
+    },
+    "base_branch": {
+      "type": "string",
+      "title": "Base branch",
+      "description": "Production branch that drafts target. Usually main.",
+      "default": "main",
+      "required": false
+    },
+    "publish_mode": {
+      "type": "string",
+      "title": "Publish mode",
+      "description": "ship = squash-merge draft into base and push base (changes go live via your existing deploy). pr = push draft and open a PR against base for manual review.",
+      "default": "ship",
+      "required": false
+    }
+  },
+  "tools": [
+    { "name": "boot", "description": "Run the full startup sequence (clone, npm install, start Astro, scan, initial render). Idempotent." },
+    { "name": "get_workspace_status", "description": "Lightweight workspace probe — config, clone state, current branch, runtime status." },
+    { "name": "get_site_profile", "description": "Return the cached Astro site profile (config presence, collections, pages, components, layouts)." },
+    { "name": "read_file", "description": "Read a file from the repo workspace." },
+    { "name": "edit_file", "description": "Replace a unique occurrence of old_string with new_string in a file. Auto-commits to the draft branch." },
+    { "name": "write_file", "description": "Write a file in the repo workspace (create or overwrite). Auto-commits to the draft branch." },
+    { "name": "list_dir", "description": "List entries in a directory within the repo workspace." },
+    { "name": "grep", "description": "Search for a regex pattern across the repo workspace." },
+    { "name": "render_preview", "description": "Render a page through the internal Astro dev server, flatten its assets, and cache it." },
+    { "name": "get_preview_html", "description": "Return the cached flattened HTML for a previously rendered page (used by the UI for srcdoc)." },
+    { "name": "list_pending_changes", "description": "Return commits on the draft branch that haven't been published yet." },
+    { "name": "revert_change", "description": "Revert a specific commit on the draft branch by sha." },
+    { "name": "undo_last_change", "description": "Revert the most recent commit on the draft branch." },
+    { "name": "publish", "description": "Publish accumulated draft changes. Default: squash-merge into base and push base. PR mode opens a review PR instead." }
+  ],
+  "_meta": {
+    "org.mpaktrust": {
+      "mtf_version": "0.1",
+      "permissions": {
+        "filesystem": "scoped",
+        "network": "required",
+        "environment": "read",
+        "subprocess": "required",
+        "native": "none"
+      },
+      "permissions_rationale": {
+        "filesystem": "Reads and writes files inside the repo workspace under $MPAK_WORKSPACE.",
+        "network": "Clones and pushes to the configured GitHub repo; fetches rendered pages from the internal Astro dev server on localhost.",
+        "environment": "Reads GITHUB_REPO_URL, GITHUB_TOKEN, and branch configuration.",
+        "subprocess": "Runs `git` and `astro dev` as child processes."
+      }
+    },
+    "ai.nimblebrain/host": {
+      "host_version": "1.0",
+      "name": "Astro Editor",
+      "icon": "rocket",
+      "category": "content",
+      "placements": [
+        {
+          "slot": "sidebar.apps",
+          "resourceUri": "ui://astro-editor/main",
+          "route": "@nimblebraininc/astro-editor",
+          "label": "Astro Editor",
+          "icon": "rocket"
+        }
+      ]
+    },
+    "ai.nimblebrain/http-proxy": {
+      "target": "http://127.0.0.1:4321",
+      "mount": "preview",
+      "websocket": true
+    }
+  }
+}

@@ -80,6 +80,18 @@ type PendingResult = {
   commits: PendingChange[];
 };
 
+type ChangedFile = {
+  path: string;
+  status: "added" | "modified" | "deleted" | "renamed" | "type_changed" | "other";
+};
+
+type ChangedFilesResult = {
+  draft_branch: string;
+  base_branch: string;
+  count: number;
+  files: ChangedFile[];
+};
+
 type PublishResult =
   | { published: false; reason: string }
   | {
@@ -102,6 +114,7 @@ function AstroEditor() {
   const bootTool = useCallTool<{ phase: BootPhase }>("boot");
   const statusTool = useCallTool<WorkspaceStatus>("get_workspace_status");
   const pendingTool = useCallTool<PendingResult>("list_pending_changes");
+  const changedFilesTool = useCallTool<ChangedFilesResult>("list_changed_files");
   const undoTool = useCallTool<{ reverted: string | null }>("undo_last_change");
   const revertTool = useCallTool<{ reverted: string }>("revert_change");
   const publishTool = useCallTool<PublishResult>("publish");
@@ -109,6 +122,7 @@ function AstroEditor() {
   const [status, setStatus] = useState<WorkspaceStatus | null>(null);
   const [iframeStamp, setIframeStamp] = useState(0);
   const [pending, setPending] = useState<PendingResult | null>(null);
+  const [changedFiles, setChangedFiles] = useState<ChangedFilesResult | null>(null);
   const [pendingOpen, setPendingOpen] = useState(false);
   const [siteInfoOpen, setSiteInfoOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -141,6 +155,15 @@ function AstroEditor() {
     }
   }
 
+  async function refreshChangedFiles() {
+    try {
+      const r = await changedFilesTool.call({});
+      setChangedFiles(r.data);
+    } catch {
+      // non-critical
+    }
+  }
+
   async function kickBoot() {
     if (bootAlreadyStarted(status) || bootKickedRef.current) return;
     bootKickedRef.current = true;
@@ -163,6 +186,7 @@ function AstroEditor() {
       refreshStatus();
       refreshPreview();
       refreshPending();
+      refreshChangedFiles();
     } catch (e) {
       setError(e instanceof Error ? e.message : "undo failed");
     }
@@ -177,6 +201,7 @@ function AstroEditor() {
       refreshStatus();
       refreshPreview();
       refreshPending();
+      refreshChangedFiles();
     } catch (e) {
       setError(e instanceof Error ? e.message : "revert failed");
     }
@@ -238,6 +263,7 @@ function AstroEditor() {
   useEffect(() => {
     if (status?.boot_phase !== "ready") return;
     refreshPending();
+    refreshChangedFiles();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [status?.boot_phase]);
 
@@ -249,6 +275,7 @@ function AstroEditor() {
       refreshStatus();
       refreshPreview();
       refreshPending();
+      refreshChangedFiles();
     }
   });
 
@@ -297,6 +324,7 @@ function AstroEditor() {
         <span style={{ fontWeight: 600 }}>🚀 Astro Editor</span>
         <StatusPill status={status} runtime={runtime} muted={muted} border={border} />
         <PendingPill
+          changedFiles={changedFiles}
           pending={pending}
           open={pendingOpen}
           onToggle={() => setPendingOpen((v) => !v)}
@@ -488,20 +516,28 @@ function bootAlreadyStarted(s: WorkspaceStatus | null): boolean {
 }
 
 function PendingPill({
+  changedFiles,
   pending,
   open,
   onToggle,
   muted,
   accent,
 }: {
+  changedFiles: ChangedFilesResult | null;
   pending: PendingResult | null;
   open: boolean;
   onToggle: () => void;
   muted: string;
   accent: string;
 }) {
-  if (!pending) return null;
-  const n = pending.count;
+  // Prefer the file-level diff (the user thinks in "what's about to ship,"
+  // not "how many commits did the agent make"). Fall back to commit count
+  // while the changed-files tool result is in flight, so the pill never
+  // disappears mid-refresh.
+  const source = changedFiles ?? pending;
+  if (!source) return null;
+  const n = source.count;
+  const noun = changedFiles ? "file" : "commit";
   const color = n > 0 ? accent : muted;
   return (
     <button
@@ -517,7 +553,9 @@ function PendingPill({
       }}
       title={n > 0 ? "Show pending changes" : "No pending changes"}
     >
-      {n === 0 ? "up to date" : `${n} pending ${open ? "▴" : "▾"}`}
+      {n === 0
+        ? "up to date"
+        : `${n} ${noun}${n === 1 ? "" : "s"} changed ${open ? "▴" : "▾"}`}
     </button>
   );
 }

@@ -112,6 +112,60 @@ async def list_commits_ahead(branch: str, base_ref: str) -> list[dict]:
     return rows
 
 
+async def list_changed_files(branch: str, base_ref: str) -> list[dict]:
+    """Return files that differ between `base_ref` and `branch`, deduplicated
+    across the commit range — i.e. the *net* set of files the draft would
+    introduce if merged into base.
+
+    Each entry: {path, status} where status is "added" / "modified" /
+    "deleted" / "renamed" / "type_changed" / "other".
+
+    Uses `git diff base...branch --name-status` (three-dot syntax — diffs
+    base's merge-base against branch tip), so a file edited five times
+    counts once and a file added then removed counts zero. That's the
+    answer to "what's about to ship," not "how many commits did we make."
+    """
+    out = await _git("diff", f"{base_ref}...{branch}", "--name-status", "-z")
+    out = out.strip("\x00")
+    if not out:
+        return []
+    # `-z` separates entries with NUL and uses NUL between status and path
+    # (and between two paths for renames). Tokens come in as
+    # status, path[, path2_for_rename], status, path, ...
+    tokens = out.split("\x00")
+    rows: list[dict] = []
+    i = 0
+    while i < len(tokens):
+        status_raw = tokens[i]
+        if not status_raw:
+            i += 1
+            continue
+        # Rename status is "R<percent>"; copy is "C<percent>". Path follows
+        # as TWO tokens: src, dst.
+        if status_raw.startswith(("R", "C")):
+            if i + 2 >= len(tokens):
+                break
+            path = tokens[i + 2]  # destination path
+            rows.append({"path": path, "status": "renamed"})
+            i += 3
+            continue
+        if i + 1 >= len(tokens):
+            break
+        path = tokens[i + 1]
+        status = _DIFF_STATUS.get(status_raw[:1], "other")
+        rows.append({"path": path, "status": status})
+        i += 2
+    return rows
+
+
+_DIFF_STATUS = {
+    "A": "added",
+    "M": "modified",
+    "D": "deleted",
+    "T": "type_changed",
+}
+
+
 async def revert(sha: str) -> str:
     """Revert a single commit, creating a new revert commit on the current branch."""
     await _git("revert", "--no-edit", sha)

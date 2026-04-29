@@ -339,6 +339,30 @@ async def list_pending_changes() -> dict:
 
 
 @mcp.tool()
+async def list_changed_files() -> dict:
+    """Return the *net* set of files the draft branch would introduce when
+    merged into the base branch.
+
+    A file edited five times in five commits counts once. A file added then
+    deleted counts zero. This is the right answer to "what is about to
+    ship" — different from `list_pending_changes`, which counts commits.
+
+    Each file: {path, status} where status is "added" / "modified" /
+    "deleted" / "renamed" / "type_changed" / "other".
+    """
+    await _ensure_ready()
+    cfg = ws_mod.load_config()
+    base_ref = f"origin/{cfg.base_branch}"
+    files = await git_ops.list_changed_files(cfg.draft_branch, base_ref)
+    return {
+        "draft_branch": cfg.draft_branch,
+        "base_branch": cfg.base_branch,
+        "count": len(files),
+        "files": files,
+    }
+
+
+@mcp.tool()
 async def revert_change(sha: str) -> dict:
     """Revert a specific commit on the draft branch (creates a new revert
     commit) and rebuild the preview so the iframe shows the reverted state."""

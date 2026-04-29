@@ -265,6 +265,81 @@ async def write_file(path: str, content: str) -> dict:
     return {"path": path, "committed": sha is not None, "sha": sha, "preview": rebuild_status}
 
 
+@mcp.tool()
+async def upload_asset(
+    filename: str,
+    base64_data: str,
+    dest_dir: str = "public/uploads",
+) -> dict:
+    """Upload a binary asset (image, logo, icon) into the repo and
+    auto-commit. Returns `{path, url, bytes}` — `path` is the
+    repo-relative file location, `url` is the site-relative URL to use
+    in markdown or JSX (e.g. `/uploads/hero.png`).
+
+    Defaults to `public/uploads/`. Astro serves anything under `public/`
+    at the site root, so the typical flow is: upload → reference by
+    `url` in a `<img src=...>` or markdown `![alt](url)`.
+
+    Size cap is the platform's tool-call JSON limit (~750 KB binary).
+    For larger images, ask the user to resize before uploading.
+    Filenames are sanitized — no path components, no leading dot,
+    only letters/digits/dot/underscore/dash.
+    """
+    await _ensure_ready()
+    result = files_tools.upload_asset(filename, base64_data, dest_dir)
+    sha = await git_ops.auto_commit(f"add asset {result['path']}")
+    rebuild_status = await _rebuild_preview()
+    return {
+        **result,
+        "committed": sha is not None,
+        "sha": sha,
+        "preview": rebuild_status,
+    }
+
+
+@mcp.tool()
+async def delete_file(path: str) -> dict:
+    """Delete a single file from the repo workspace, auto-commit, and
+    rebuild the preview. Use for removing blog posts, unused components,
+    or any other file the user no longer wants. Directories are not
+    supported — remove their contents file by file."""
+    await _ensure_ready()
+    files_tools.delete_file(path)
+    sha = await git_ops.auto_commit(f"delete {path}")
+    rebuild_status = await _rebuild_preview()
+    return {"path": path, "committed": sha is not None, "sha": sha, "preview": rebuild_status}
+
+
+@mcp.tool()
+async def multi_edit_file(path: str, edits: list[dict]) -> dict:
+    """Apply multiple {old_string, new_string} edits to a single file in
+    one atomic write. Each `old_string` must match exactly once after
+    prior edits in this call have been applied — same uniqueness rule
+    as `edit_file`.
+
+    Use this when you need to change several places in the same file:
+    one auto-commit and one rebuild instead of N. Common cases:
+    renaming a symbol used in multiple call sites, applying a consistent
+    style tweak across a component, or batching frontmatter + body edits
+    on a content collection entry.
+
+    Each edit is `{"old_string": "...", "new_string": "..."}`. The list
+    is applied in order; if any edit fails (no match, ambiguous match,
+    or identical strings) the file is not touched.
+    """
+    await _ensure_ready()
+    files_tools.multi_edit_file(path, edits)
+    sha = await git_ops.auto_commit(f"multi-edit {path} ({len(edits)} change{'s' if len(edits) != 1 else ''})")
+    rebuild_status = await _rebuild_preview()
+    return {
+        "path": path,
+        "edits_applied": len(edits),
+        "committed": sha is not None,
+        "sha": sha,
+        "preview": rebuild_status,
+    }
+
+
 async def _rebuild_preview() -> str:
     """Rebuild the astro preview after a file change.
 
@@ -287,11 +362,17 @@ async def _rebuild_preview() -> str:
 
     Also persists the result on SESSION (`last_build_*`) so the UI can
     render a banner without depending on the most recent tool result.
+    Sets `last_build_status = "building"` on entry; polling on the UI
+    side flips the rebuilding overlay on for agent-initiated edits the
+    UI wouldn't otherwise see in flight.
     """
     if SESSION.runtime is None:
         # Runtime down isn't a build failure — leave last_build_status alone
         # so the UI doesn't flip from "ok" to "failed" on an unrelated edit.
         return "skipped (runtime down)"
+    SESSION.last_build_status = "building"
+    SESSION.last_build_error = None
+    SESSION.last_build_at = time.time()
     try:
         await SESSION.runtime.rebuild()
         SESSION.last_build_status = "ok"
@@ -453,6 +534,48 @@ async def undo_last_change() -> dict:
         "message": latest["message"],
         "preview": rebuild_status,
     }
+
+
+@mcp.tool()
+async def get_publish_preview() -> dict:
+    """Preview what `publish` is about to do without actually publishing.
+    Returns the publish mode, the base/draft branches, the file-level diff
+    against the base branch, and the commit list — everything the UI
+    needs to render a "Confirm Publish" dialog with paraphrased scope.
+
+    Read-only. Always safe to call.
+    """
+    await _ensure_ready()
+    cfg = ws_mod.load_config()
+    mode = (os.getenv("PUBLISH_MODE") or "ship").lower()
+    base_ref = f"origin/{cfg.base_branch}"
+    # Don't `fetch` here — preview is a read-only probe and we don't want
+    # to hit the remote on every modal open. The caller of `publish` will
+    # fetch and recompute fresh state at ship time.
+    commits = await git_ops.list_commits_ahead(cfg.draft_branch, base_ref)
+    files = await git_ops.list_changed_files(cfg.draft_branch, base_ref)
+    return {
+        "mode": mode,
+        "draft_branch": cfg.draft_branch,
+        "base_branch": cfg.base_branch,
+        "commit_count": len(commits),
+        "file_count": len(files),
+        "files": files,
+        "commits": commits,
+        # Human-shaped paraphrase the UI can lift directly into a dialog
+        # body, so the wording stays consistent regardless of caller.
+        "summary": _publish_summary(mode, files, cfg.base_branch),
+    }
+
+
+def _publish_summary(mode: str, files: list[dict], base_branch: str) -> str:
+    if not files:
+        return "No pending changes — nothing to publish."
+    file_count = len(files)
+    noun = "file" if file_count == 1 else "files"
+    if mode == "pr":
+        return f"Push {file_count} changed {noun} as a PR against {base_branch}."
+    return f"Ship {file_count} changed {noun} to {base_branch} — changes go live via your deploy."
 
 
 @mcp.tool()

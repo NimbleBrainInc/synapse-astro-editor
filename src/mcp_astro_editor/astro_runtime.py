@@ -1,14 +1,27 @@
-"""Astro dev subprocess manager.
+"""Astro build + preview subprocess manager.
 
-Spawns `astro dev` as a child process bound to localhost:4321 and provides a
-client for fetching rendered pages. The dev server is never exposed externally
-— the MCP server is the only consumer.
+The editor uses `astro build` + `astro preview`, NOT `astro dev`. Reasoning:
+
+  - Editor UX is "edit → publish", not "save and watch HMR." Build mode
+    is the right architectural fit — no Vite dev runtime, no live module
+    server, no need for HMR.
+  - `astro dev` injects unprefixed `<script src="/@vite/client">` and
+    `<script src="/src/styles/global.css">` paths that bypass `--base`
+    config. When the bundle runs behind the platform's same-origin proxy,
+    those paths 404 from the platform web origin → no Tailwind, broken
+    preview. `astro build` bakes URLs in at build time, all correctly
+    prefixed, no runtime injection.
+  - `astro preview` is a minimal static server (Sirv); the output it serves
+    is what production deploys, so the preview is a true preview.
+
+Tradeoff: a build cycle takes 5–30s vs `astro dev`'s instant boot. We
+rebuild on demand (initial boot + when `rebuild()` is called after edits).
 
 Lifecycle hardening:
-  - start_new_session=True puts astro (and any node sub-children) in their own
-    process group, so we can kill the whole group on shutdown
-  - Pre-flight checks the port; if a stale astro/node is squatting on it from
-    a prior crashed run, SIGTERM it before spawning fresh
+  - start_new_session=True puts astro (and any node sub-children) in their
+    own process group, so we can kill the whole group on shutdown
+  - Pre-flight checks the port; if a stale astro/node is squatting on it
+    from a prior crashed run, SIGTERM it before spawning fresh
   - stop() kills the entire process group, not just the lead pid, so vite/
     rollup workers don't get orphaned
 """
@@ -26,8 +39,9 @@ from pathlib import Path
 import httpx
 
 DEFAULT_PORT = 4321
-STARTUP_TIMEOUT_S = 90.0
+STARTUP_TIMEOUT_S = 30.0
 HEALTH_INTERVAL_S = 0.5
+BUILD_TIMEOUT_S = 180.0
 
 
 @dataclass
@@ -42,18 +56,62 @@ class AstroRuntime:
         return f"http://127.0.0.1:{self.port}"
 
     async def start(self) -> None:
-        """Spawn `astro dev` and wait until it answers HTTP."""
+        """Build the site, then spawn `astro preview` and wait for HTTP ready.
+
+        Build runs synchronously to completion before preview starts. If the
+        build fails we don't start preview — the caller's boot phase reports
+        the build error and the UI shows it.
+        """
         if self.process and self.process.returncode is None:
             return
 
         # Reap any orphan from a prior crashed run sitting on our port.
         _kill_orphans_on_port(self.port)
 
-        cmd = ["npx", "astro", "dev", "--host", "127.0.0.1", "--port", str(self.port)]
+        await self._build()
+        await self._spawn_preview()
+        await self._await_healthy()
+
+    async def rebuild(self) -> None:
+        """Re-run `astro build` and restart preview. Called when the workspace
+        has new edits and the cached output is stale."""
+        await self._build()
+        await self.stop()
+        await self._spawn_preview()
+        await self._await_healthy()
+
+    async def _build(self) -> None:
+        cmd = ["npx", "astro", "build"]
         if self.base_override:
             cmd += ["--base", self.base_override]
-        print(f"[astro] starting: {' '.join(cmd)} (cwd={self.repo_path})", file=sys.stderr)
+        print(f"[astro] building: {' '.join(cmd)} (cwd={self.repo_path})", file=sys.stderr)
+        proc = await asyncio.create_subprocess_exec(
+            *cmd,
+            cwd=self.repo_path,
+            stdin=asyncio.subprocess.DEVNULL,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            env={**os.environ, "FORCE_COLOR": "0", "CI": "1"},
+            start_new_session=True,
+        )
+        try:
+            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=BUILD_TIMEOUT_S)
+        except TimeoutError:
+            proc.kill()
+            raise RuntimeError(f"astro build timed out after {BUILD_TIMEOUT_S}s") from None
+        if proc.returncode != 0:
+            tail = stderr.decode("utf-8", errors="replace").strip().splitlines()[-20:]
+            raise RuntimeError("astro build failed:\n" + "\n".join(tail))
+        print(
+            f"[astro] build ok ({len(stdout)} bytes stdout, {len(stderr)} bytes stderr)",
+            file=sys.stderr,
+        )
 
+    async def _spawn_preview(self) -> None:
+        cmd = ["npx", "astro", "preview", "--host", "127.0.0.1", "--port", str(self.port)]
+        if self.base_override:
+            cmd += ["--base", self.base_override]
+        print(f"[astro] starting preview: {' '.join(cmd)} (cwd={self.repo_path})", file=sys.stderr)
         self.process = await asyncio.create_subprocess_exec(
             *cmd,
             cwd=self.repo_path,
@@ -65,15 +123,13 @@ class AstroRuntime:
             start_new_session=True,
         )
 
-        await self._await_healthy()
-
     async def _await_healthy(self) -> None:
         deadline = asyncio.get_event_loop().time() + STARTUP_TIMEOUT_S
         async with httpx.AsyncClient(timeout=2.0) as client:
             while asyncio.get_event_loop().time() < deadline:
                 if self.process and self.process.returncode is not None:
                     raise RuntimeError(
-                        f"astro dev exited early with code {self.process.returncode}"
+                        f"astro preview exited early with code {self.process.returncode}"
                     )
                 try:
                     r = await client.get(self.base_url)

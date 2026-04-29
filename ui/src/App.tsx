@@ -103,6 +103,7 @@ function AstroEditor() {
   const [iframeStamp, setIframeStamp] = useState(0);
   const [pending, setPending] = useState<PendingResult | null>(null);
   const [pendingOpen, setPendingOpen] = useState(false);
+  const [siteInfoOpen, setSiteInfoOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
 
@@ -195,7 +196,18 @@ function AstroEditor() {
 
   // First mount — get current state, kick boot if needed.
   useEffect(() => {
+    // Make the iframe slot's html/body fill the viewport so our root's
+    // `height: 100%` resolves to the slot height instead of collapsing to
+    // content height. Without this the editor renders at ~200px tall and
+    // the preview iframe only shows the website's nav.
+    document.documentElement.style.height = "100%";
+    document.body.style.height = "100%";
     document.body.style.margin = "0";
+    document.body.style.overflow = "hidden";
+    // React mounts into #root, which also needs to fill the body or our flex
+    // root collapses to its content height (header only).
+    const rootEl = document.getElementById("root");
+    if (rootEl) rootEl.style.height = "100%";
     (async () => {
       const s = await refreshStatus();
       if (s && !bootAlreadyStarted(s)) kickBoot();
@@ -244,9 +256,15 @@ function AstroEditor() {
   return (
     <div
       style={{
+        // Fill the platform slot exactly. `100vh` would be the browser viewport
+        // (taller than the slot the platform gives us), which causes the
+        // editor to overflow and show an extra outer scrollbar alongside the
+        // iframe's own.
         display: "flex",
         flexDirection: "column",
-        height: "100vh",
+        height: "100%",
+        minHeight: 0,
+        overflow: "hidden",
         fontFamily:
           "var(--font-sans, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif)",
         color: fg,
@@ -275,6 +293,25 @@ function AstroEditor() {
           accent={accent}
         />
         <div style={{ flex: 1 }} />
+        <SiteInfoButton
+          profile={profile}
+          status={status}
+          open={siteInfoOpen}
+          onToggle={() => setSiteInfoOpen((v) => !v)}
+          muted={muted}
+          border={border}
+          fg={fg}
+          bg={bg}
+          bgSubtle={bgSubtle}
+        />
+        <button
+          onClick={refreshPreview}
+          disabled={runtime !== "running"}
+          style={ghostBtn(border, fg, runtime !== "running")}
+          title="Reload preview"
+        >
+          ↻
+        </button>
         <button
           onClick={handleUndo}
           disabled={undoTool.isPending || !pending || pending.count === 0}
@@ -316,44 +353,26 @@ function AstroEditor() {
         />
       )}
 
-      <div style={{ display: "flex", flex: 1, minHeight: 0 }}>
-        <aside
+      <div style={{ display: "flex", flex: 1, minWidth: 0, minHeight: 0 }}>
+        <main
           style={{
-            width: 240,
-            borderRight: `1px solid ${border}`,
-            background: bgSubtle,
-            display: "flex",
-            flexDirection: "column",
-            flexShrink: 0,
+            // `flex: 1` paired with `minWidth: 0` is the canonical "fill the
+            // remaining flex track without growing past it." Default flex
+            // items have `min-width: auto` (= min-content), which expands the
+            // item to fit its intrinsic child width. The preview iframe is
+            // hardcoded to PREVIEW_DESIGN_WIDTH (1280) — without minWidth: 0
+            // here, `<main>` swells to 1280 even when the editor's host slot
+            // is narrower (e.g., chat panel open), and the iframe's
+            // ResizeObserver never sees the true visible width to scale to.
+            // overflow: hidden clips the scaled iframe to our pane.
+            flex: 1,
+            minWidth: 0,
+            minHeight: 0,
+            overflow: "hidden",
+            position: "relative",
+            background: bg,
           }}
         >
-          {profile ? (
-            <ProfilePanel profile={profile} status={status} muted={muted} fg={fg} />
-          ) : (
-            <div style={{ padding: ".75rem .9rem", color: muted, fontSize: ".82rem" }}>
-              Site info appears once the workspace is ready.
-            </div>
-          )}
-          <div
-            style={{
-              padding: ".55rem .75rem",
-              borderTop: `1px solid ${border}`,
-              display: "flex",
-              justifyContent: "flex-end",
-            }}
-          >
-            <button
-              onClick={refreshPreview}
-              disabled={runtime !== "running"}
-              style={ghostBtn(border, fg, runtime !== "running")}
-              title="Reload preview"
-            >
-              ↻ Reload
-            </button>
-          </div>
-        </aside>
-
-        <main style={{ flex: 1, position: "relative", background: bg }}>
           {phase === "failed" ? (
             <CenterMessage muted={muted}>
               Setup failed.
@@ -391,17 +410,10 @@ function AstroEditor() {
               Astro dev server is not running. Check status pill.
             </CenterMessage>
           ) : status?.preview_url ? (
-            <iframe
-              key={iframeStamp}
-              title="Astro preview"
+            <ScaledPreview
               src={`${status.preview_url}?_=${iframeStamp}`}
-              style={{
-                width: "100%",
-                height: "100%",
-                border: "none",
-                background: bg,
-              }}
-              sandbox="allow-scripts allow-same-origin allow-forms allow-popups"
+              iframeKey={iframeStamp}
+              bg={bg}
             />
           ) : (
             <CenterMessage muted={muted}>
@@ -541,6 +553,153 @@ function PendingList({
           </button>
         </div>
       ))}
+    </div>
+  );
+}
+
+/**
+ * Render the preview iframe at a fixed "design width" and CSS-scale it to fit
+ * the actual pane width. This is the standard responsive-preview pattern
+ * (CodeSandbox / Storybook / Vercel preview):
+ *
+ *   - Sites usually have a designed-for desktop width (most marketing sites:
+ *     1200–1440px). At narrower widths their layouts often have small overflow
+ *     bugs that produce horizontal scrollbars in the preview pane.
+ *   - Rendering at the design width and scaling-to-fit gives the editor user
+ *     the design as intended, just smaller. No horizontal scrollbar from
+ *     site CSS quirks.
+ *   - Layout-sensitive previews (a 320px mobile mockup, etc.) belong as a
+ *     follow-up "viewport size" picker; the desktop default is the right
+ *     out-of-the-box choice.
+ */
+const PREVIEW_DESIGN_WIDTH = 1280;
+
+function ScaledPreview({
+  src,
+  iframeKey,
+  bg,
+}: {
+  src: string;
+  iframeKey: number;
+  bg: string;
+}) {
+  const containerRef = useRef<HTMLDivElement>(null);
+  const [scale, setScale] = useState(1);
+
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    const update = () => {
+      const w = el.clientWidth;
+      // Don't scale UP — if the pane is wider than the design width, render
+      // at native size and center horizontally.
+      setScale(Math.min(1, w / PREVIEW_DESIGN_WIDTH));
+    };
+    update();
+    const observer = new ResizeObserver(update);
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, []);
+
+  // Iframe at native pixels: width = design, height = container/scale so
+  // after scaling it fills the container vertically.
+  const inverseScalePct = scale > 0 ? 100 / scale : 100;
+
+  return (
+    <div
+      ref={containerRef}
+      style={{
+        width: "100%",
+        height: "100%",
+        overflow: "hidden",
+        background: bg,
+        // Center the scaled iframe horizontally when the pane is wider than
+        // the scaled design width (e.g., on very wide editor panes).
+        display: "flex",
+        justifyContent: "center",
+      }}
+    >
+      <iframe
+        key={iframeKey}
+        title="Astro preview"
+        src={src}
+        style={{
+          display: "block",
+          width: `${PREVIEW_DESIGN_WIDTH}px`,
+          height: `${inverseScalePct}%`,
+          border: "none",
+          background: bg,
+          transformOrigin: "top center",
+          transform: `scale(${scale})`,
+          flexShrink: 0,
+        }}
+        sandbox="allow-scripts allow-same-origin allow-forms allow-popups"
+      />
+    </div>
+  );
+}
+
+function SiteInfoButton({
+  profile,
+  status,
+  open,
+  onToggle,
+  muted,
+  border,
+  fg,
+  bg,
+  bgSubtle,
+}: {
+  profile: SiteProfile | null;
+  status: WorkspaceStatus | null;
+  open: boolean;
+  onToggle: () => void;
+  muted: string;
+  border: string;
+  fg: string;
+  bg: string;
+  bgSubtle: string;
+}) {
+  if (!profile) return null;
+  return (
+    <div style={{ position: "relative" }}>
+      <button
+        onClick={onToggle}
+        style={{
+          fontSize: ".75rem",
+          color: muted,
+          border: `1px solid ${border}`,
+          borderRadius: 999,
+          padding: ".1rem .55rem",
+          background: "transparent",
+          cursor: "pointer",
+        }}
+        title="Site info"
+      >
+        Site {open ? "▴" : "▾"}
+      </button>
+      {open && (
+        <div
+          style={{
+            position: "absolute",
+            top: "calc(100% + .35rem)",
+            right: 0,
+            zIndex: 10,
+            minWidth: 280,
+            background: bg,
+            color: fg,
+            border: `1px solid ${border}`,
+            borderRadius: 8,
+            boxShadow: "0 6px 20px rgba(0,0,0,.08)",
+            padding: ".75rem .9rem",
+            fontSize: ".8rem",
+          }}
+        >
+          <ProfilePanel profile={profile} status={status} muted={muted} fg={fg} />
+        </div>
+      )}
+      {/* unused, kept to silence lint for unused params on some bundlers */}
+      <span style={{ display: "none" }}>{bgSubtle}</span>
     </div>
   );
 }

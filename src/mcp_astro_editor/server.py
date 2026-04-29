@@ -223,23 +223,58 @@ async def read_file(path: str) -> str:
 
 @mcp.tool()
 async def edit_file(path: str, old_string: str, new_string: str) -> dict:
-    """Replace the unique occurrence of old_string in the given file and
-    auto-commit the change to the draft branch."""
+    """Replace the unique occurrence of old_string in the given file,
+    auto-commit the change, and rebuild the preview so the iframe shows
+    the edit on next reload."""
     await _ensure_ready()
     files_tools.edit_file(path, old_string, new_string)
     sha = await git_ops.auto_commit(f"edit {path}")
-    return {"path": path, "committed": sha is not None, "sha": sha}
+    rebuild_status = await _rebuild_preview()
+    return {"path": path, "committed": sha is not None, "sha": sha, "preview": rebuild_status}
 
 
 @mcp.tool()
 async def write_file(path: str, content: str) -> dict:
-    """Write a file in the repo workspace and auto-commit."""
+    """Write a file in the repo workspace, auto-commit, and rebuild the
+    preview so the iframe shows the edit on next reload."""
     await _ensure_ready()
     existed = (SESSION.repo_path / path).exists() if SESSION.repo_path else False
     files_tools.write_file(path, content)
     verb = "update" if existed else "create"
     sha = await git_ops.auto_commit(f"{verb} {path}")
-    return {"path": path, "committed": sha is not None, "sha": sha}
+    rebuild_status = await _rebuild_preview()
+    return {"path": path, "committed": sha is not None, "sha": sha, "preview": rebuild_status}
+
+
+async def _rebuild_preview() -> str:
+    """Rebuild the astro preview after a file change.
+
+    Why eager (rebuild on every edit) vs debounced:
+      - The agent's edit and the visible-preview update are one logical step
+        from the user's mental model. Coupling them surfaces build errors
+        immediately at the call that caused them, so a malformed edit shows
+        an error tied to that tool call rather than a later silent-stale
+        preview.
+      - Build is fast on warm caches (~3-8s) since astro-preview reuses the
+        same node_modules + .astro cache. The bottleneck is the agent's
+        own LLM latency, not our build.
+      - Debouncing would require a background task + cancellation handling
+        and would still need a sync rebuild before publish — adds complexity
+        for marginal gain.
+
+    Returns "rebuilt" / "skipped (runtime down)" / "failed: <message>".
+    Never raises — a build failure shouldn't block the file edit from
+    being committed; the user can fix the broken edit, retry, or revert.
+    """
+    if SESSION.runtime is None:
+        return "skipped (runtime down)"
+    try:
+        await SESSION.runtime.rebuild()
+        return "rebuilt"
+    except Exception as exc:
+        msg = str(exc)
+        # Surface the error in the response without crashing the bundle.
+        return f"failed: {msg[:300]}"
 
 
 @mcp.tool()
@@ -291,15 +326,18 @@ async def list_pending_changes() -> dict:
 
 @mcp.tool()
 async def revert_change(sha: str) -> dict:
-    """Revert a specific commit on the draft branch (creates a new revert commit)."""
+    """Revert a specific commit on the draft branch (creates a new revert
+    commit) and rebuild the preview so the iframe shows the reverted state."""
     await _ensure_ready()
     new_sha = await git_ops.revert(sha)
-    return {"reverted": sha, "new_sha": new_sha}
+    rebuild_status = await _rebuild_preview()
+    return {"reverted": sha, "new_sha": new_sha, "preview": rebuild_status}
 
 
 @mcp.tool()
 async def undo_last_change() -> dict:
-    """Revert the most recent commit on the draft branch."""
+    """Revert the most recent commit on the draft branch and rebuild the
+    preview so the iframe shows the reverted state."""
     await _ensure_ready()
     cfg = ws_mod.load_config()
     base_ref = f"origin/{cfg.base_branch}"
@@ -308,7 +346,13 @@ async def undo_last_change() -> dict:
         return {"reverted": None, "message": "Nothing to undo."}
     latest = commits[-1]
     new_sha = await git_ops.revert(latest["sha"])
-    return {"reverted": latest["sha"], "new_sha": new_sha, "message": latest["message"]}
+    rebuild_status = await _rebuild_preview()
+    return {
+        "reverted": latest["sha"],
+        "new_sha": new_sha,
+        "message": latest["message"],
+        "preview": rebuild_status,
+    }
 
 
 @mcp.tool()
@@ -401,7 +445,37 @@ def _pr_body(commits: list[dict]) -> str:
 # ─── UI resources ──────────────────────────────────────────────────────────
 
 
-@mcp.resource("ui://astro-editor/main", mime_type="text/html;profile=mcp-app")
+def _ui_csp_meta() -> dict[str, Any]:
+    """Build the `_meta.ui.csp` block for our UI resources.
+
+    The editor shell needs to frame the platform-proxied preview URL and
+    open a same-origin WebSocket back to it (Vite HMR). Both target the
+    platform's own browser-facing origin, which the platform injects as
+    NB_PUBLIC_ORIGIN at bundle startup.
+
+    If NB_PUBLIC_ORIGIN isn't set (e.g., the host hasn't been configured),
+    we omit the declaration entirely — the host will apply its restrictive
+    default and the iframe just won't load. That's the right failure mode:
+    visible, fixable by setting one env var.
+    """
+    public_origin = (os.getenv("NB_PUBLIC_ORIGIN") or "").rstrip("/")
+    if not public_origin:
+        return {}
+    return {
+        "ui": {
+            "csp": {
+                "frameDomains": [public_origin],
+                "connectDomains": [public_origin],
+            }
+        }
+    }
+
+
+@mcp.resource(
+    "ui://astro-editor/main",
+    mime_type="text/html;profile=mcp-app",
+    meta=_ui_csp_meta() or None,
+)
 def main_ui() -> str:
     html = ui_mod.load_main_ui()
     print(f"[ui] main resource served, {len(html)} bytes", file=sys.stderr)

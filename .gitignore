@@ -16,6 +16,7 @@ ui/.vite/
 
 # Platform workspace data (cloned repo, credentials)
 .nimblebrain/
+.environments/
 
 # Local env
 .env

@@ -14,6 +14,7 @@ import os
 import signal
 import sys
 import time
+from importlib.resources import files
 from typing import Any
 
 from fastmcp import FastMCP
@@ -31,12 +32,27 @@ from .tools import git_ops, github_api
 mcp = FastMCP(
     "Astro Editor",
     instructions=(
-        "Natural-language editor for an Astro website. Configure GITHUB_REPO_URL "
-        "and GITHUB_TOKEN; the server clones the repo, installs deps, runs Astro "
-        "dev locally, and renders a flattened live preview. Each file edit "
-        "auto-commits to the draft branch. Publish squash-merges to main."
+        "Natural-language editor for an Astro website. The server clones the "
+        "configured GitHub repo, runs astro build+preview locally, and serves "
+        "a live preview through the platform's same-origin proxy. Edits "
+        "auto-commit to the draft branch and rebuild the preview; publish "
+        "squash-merges to the base branch.\n"
+        "\n"
+        "Before editing, read the skill://astro-editor/usage resource for "
+        "tool selection, page-context usage, and the minimal-edit discipline "
+        "this bundle expects."
     ),
 )
+
+
+SKILL_CONTENT = files("mcp_astro_editor").joinpath("SKILL.md").read_text()
+
+
+@mcp.resource("skill://astro-editor/usage")
+def astro_editor_skill() -> str:
+    """How to use the Astro editor effectively: page-context-driven editing,
+    minimal edits, build-failure recovery, publish flow."""
+    return SKILL_CONTENT
 
 _init_lock = asyncio.Lock()
 _boot_task: asyncio.Task | None = None

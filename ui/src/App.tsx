@@ -4,6 +4,7 @@ import {
   useCallTool,
   useDataSync,
   useTheme,
+  useVisibleState,
 } from "@nimblebrain/synapse/react";
 
 type SiteProfile = {
@@ -127,6 +128,12 @@ function AstroEditor() {
   const [siteInfoOpen, setSiteInfoOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
+  // What the user is currently looking at inside the preview iframe. Pushed
+  // to the host as visible state so the agent gets "user is viewing /about"
+  // in its per-turn context — no asking, no guessing.
+  const [currentPage, setCurrentPage] = useState<{ path: string; title: string } | null>(
+    null,
+  );
 
   const bootKickedRef = useRef(false);
 
@@ -278,6 +285,28 @@ function AstroEditor() {
       refreshChangedFiles();
     }
   });
+
+  // Push the page the user is currently viewing into the agent's per-turn
+  // context. The host wraps this in containment so the agent reads it as
+  // "the user is currently viewing X" without us having to add a tool call.
+  // Updates whenever the inner iframe navigates; the declarative form
+  // auto-debounces (250ms in the Synapse SDK).
+  useVisibleState(
+    () => ({
+      state: currentPage
+        ? {
+            currentPath: currentPage.path,
+            currentTitle: currentPage.title,
+          }
+        : {},
+      summary: currentPage
+        ? `Currently viewing ${currentPage.path}${
+            currentPage.title ? ` (${currentPage.title})` : ""
+          }`
+        : undefined,
+    }),
+    [currentPage?.path, currentPage?.title],
+  );
 
   const fg = theme.tokens["--color-text-primary"] || "#111827";
   const bg = theme.tokens["--color-background-primary"] || "#fff";
@@ -454,6 +483,8 @@ function AstroEditor() {
                 src={`${status.preview_url}?_=${iframeStamp}`}
                 iframeKey={iframeStamp}
                 bg={bg}
+                proxyPrefix={status.preview_url}
+                onNavigate={setCurrentPage}
               />
               {status.last_build_status === "failed" && status.last_build_error && (
                 <BuildErrorBanner
@@ -634,12 +665,21 @@ function ScaledPreview({
   src,
   iframeKey,
   bg,
+  proxyPrefix,
+  onNavigate,
 }: {
   src: string;
   iframeKey: number;
   bg: string;
+  /** Public path prefix the proxy serves under, e.g.
+   *  `/v1/ws/<wsId>/apps/<bundle>/preview`. Used to strip the prefix from
+   *  the iframe's pathname so `onNavigate` reports the user-facing route
+   *  (`/about`) rather than the proxied one. */
+  proxyPrefix?: string | null;
+  onNavigate?: (info: { path: string; title: string }) => void;
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
+  const iframeRef = useRef<HTMLIFrameElement>(null);
   const [scale, setScale] = useState(1);
 
   useEffect(() => {
@@ -656,6 +696,30 @@ function ScaledPreview({
     observer.observe(el);
     return () => observer.disconnect();
   }, []);
+
+  // Read the inner page's location + title on every iframe load. The proxy
+  // serves on the platform origin (same as us), so cross-frame DOM access
+  // is allowed. If the platform ever flips on cross-origin isolation per
+  // bundle, contentWindow access throws — the try/catch lets us fail
+  // closed (no page context pushed) without breaking the preview.
+  function handleLoad() {
+    if (!onNavigate) return;
+    const iframe = iframeRef.current;
+    if (!iframe) return;
+    try {
+      const win = iframe.contentWindow;
+      const doc = iframe.contentDocument;
+      if (!win || !doc) return;
+      let pathname = win.location.pathname;
+      // Strip the proxy prefix so we report the user-facing route.
+      if (proxyPrefix && pathname.startsWith(proxyPrefix)) {
+        pathname = pathname.slice(proxyPrefix.length) || "/";
+      }
+      onNavigate({ path: pathname, title: doc.title ?? "" });
+    } catch {
+      // Cross-origin or detached document — fail silently.
+    }
+  }
 
   // Iframe at native pixels: width = design, height = container/scale so
   // after scaling it fills the container vertically.
@@ -676,9 +740,11 @@ function ScaledPreview({
       }}
     >
       <iframe
+        ref={iframeRef}
         key={iframeKey}
         title="Astro preview"
         src={src}
+        onLoad={handleLoad}
         style={{
           display: "block",
           width: `${PREVIEW_DESIGN_WIDTH}px`,

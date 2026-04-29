@@ -373,6 +373,36 @@ async def revert_change(sha: str) -> dict:
 
 
 @mcp.tool()
+async def revert_file_to_base(path: str) -> dict:
+    """Revert a single file to whatever it looks like on the base branch,
+    discarding every accumulated change to that path on the draft branch.
+
+    Useful when the user wants to undo edits to one file without unwinding
+    later edits to other files. The action is one new commit on the draft
+    branch (`revert <path> to base`) — same shape as every other edit, so
+    publish-time diff stays clean.
+
+    File-state cases the underlying git op handles:
+      - Modified on draft → checkout base's version.
+      - Added on draft (didn't exist on base) → remove the file.
+      - Deleted on draft (existed on base) → restore from base.
+    """
+    await _ensure_ready()
+    cfg = ws_mod.load_config()
+    base_ref = f"origin/{cfg.base_branch}"
+    result = await git_ops.revert_file_to_base(path, base_ref)
+    sha = await git_ops.auto_commit(f"revert {path} to base")
+    rebuild_status = await _rebuild_preview()
+    return {
+        "path": path,
+        "action": result["action"],
+        "committed": sha is not None,
+        "sha": sha,
+        "preview": rebuild_status,
+    }
+
+
+@mcp.tool()
 async def undo_last_change() -> dict:
     """Revert the most recent commit on the draft branch and rebuild the
     preview so the iframe shows the reverted state."""

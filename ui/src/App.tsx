@@ -117,7 +117,9 @@ function AstroEditor() {
   const pendingTool = useCallTool<PendingResult>("list_pending_changes");
   const changedFilesTool = useCallTool<ChangedFilesResult>("list_changed_files");
   const undoTool = useCallTool<{ reverted: string | null }>("undo_last_change");
-  const revertTool = useCallTool<{ reverted: string }>("revert_change");
+  const revertFileTool = useCallTool<{ path: string; action: string }>(
+    "revert_file_to_base",
+  );
   const publishTool = useCallTool<PublishResult>("publish");
 
   const [status, setStatus] = useState<WorkspaceStatus | null>(null);
@@ -199,11 +201,11 @@ function AstroEditor() {
     }
   }
 
-  async function handleRevert(sha: string) {
+  async function handleRevertFile(path: string) {
     setError(null);
     try {
-      await revertTool.call({ sha });
-      setToast("Change reverted");
+      await revertFileTool.call({ path });
+      setToast(`Reverted ${path}`);
       setTimeout(() => setToast(null), 3000);
       refreshStatus();
       refreshPreview();
@@ -410,11 +412,11 @@ function AstroEditor() {
         </div>
       )}
 
-      {pendingOpen && pending && pending.commits.length > 0 && (
-        <PendingList
-          pending={pending}
-          onRevert={handleRevert}
-          revertingSha={revertTool.isPending}
+      {pendingOpen && changedFiles && changedFiles.files.length > 0 && (
+        <ChangedFilesList
+          changedFiles={changedFiles}
+          onRevertFile={handleRevertFile}
+          isReverting={revertFileTool.isPending}
           border={border}
           muted={muted}
           fg={fg}
@@ -591,17 +593,17 @@ function PendingPill({
   );
 }
 
-function PendingList({
-  pending,
-  onRevert,
-  revertingSha,
+function ChangedFilesList({
+  changedFiles,
+  onRevertFile,
+  isReverting,
   border,
   muted,
   fg,
 }: {
-  pending: PendingResult;
-  onRevert: (sha: string) => void;
-  revertingSha: boolean;
+  changedFiles: ChangedFilesResult;
+  onRevertFile: (path: string) => void;
+  isReverting: boolean;
   border: string;
   muted: string;
   fg: string;
@@ -616,9 +618,9 @@ function PendingList({
         fontSize: ".82rem",
       }}
     >
-      {pending.commits.slice().reverse().map((c) => (
+      {changedFiles.files.map((f) => (
         <div
-          key={c.sha}
+          key={f.path}
           style={{
             display: "flex",
             alignItems: "center",
@@ -627,20 +629,68 @@ function PendingList({
             borderBottom: `1px solid ${border}`,
           }}
         >
-          <code style={{ color: muted, fontSize: ".75rem" }}>{c.short_sha}</code>
-          <span style={{ flex: 1, color: fg, wordBreak: "break-word" }}>
-            {c.message}
-          </span>
+          <StatusBadge status={f.status} muted={muted} />
+          <code
+            style={{
+              flex: 1,
+              color: fg,
+              wordBreak: "break-all",
+              fontSize: ".78rem",
+              fontFamily:
+                "var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace)",
+            }}
+          >
+            {f.path}
+          </code>
           <button
-            onClick={() => onRevert(c.sha)}
-            disabled={revertingSha}
-            style={ghostBtn(border, fg, revertingSha)}
+            onClick={() => onRevertFile(f.path)}
+            disabled={isReverting}
+            style={ghostBtn(border, fg, isReverting)}
+            title={`Revert ${f.path} to ${changedFiles.base_branch}`}
           >
             Revert
           </button>
         </div>
       ))}
     </div>
+  );
+}
+
+function StatusBadge({
+  status,
+  muted,
+}: {
+  status: ChangedFile["status"];
+  muted: string;
+}) {
+  // Single-letter badge that mirrors `git status --short` so it's familiar
+  // to anyone who's used git: A added, M modified, D deleted, R renamed,
+  // T type changed.
+  const map: Record<ChangedFile["status"], { letter: string; color: string }> = {
+    added: { letter: "A", color: "#16a34a" },
+    modified: { letter: "M", color: "#2563eb" },
+    deleted: { letter: "D", color: "#dc2626" },
+    renamed: { letter: "R", color: "#9333ea" },
+    type_changed: { letter: "T", color: "#ca8a04" },
+    other: { letter: "?", color: muted },
+  };
+  const { letter, color } = map[status];
+  return (
+    <span
+      style={{
+        display: "inline-block",
+        width: "1.4rem",
+        textAlign: "center",
+        fontFamily:
+          "var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace)",
+        fontSize: ".75rem",
+        fontWeight: 600,
+        color,
+      }}
+      title={status}
+    >
+      {letter}
+    </span>
   );
 }
 

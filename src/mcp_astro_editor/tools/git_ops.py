@@ -172,6 +172,38 @@ async def revert(sha: str) -> str:
     return (await _git("rev-parse", "HEAD")).strip()
 
 
+async def revert_file_to_base(path: str, base_ref: str) -> dict:
+    """Revert a single file to its state on `base_ref`, then stage the change.
+    The caller is expected to commit (or skip-if-noop) afterward.
+
+    Three paths through git's behavior:
+      - File exists at base → `checkout base -- path` overwrites the working
+        copy with base's version.
+      - File doesn't exist at base (it was added on draft) → `git rm` it.
+      - File doesn't exist on draft (was deleted) → checkout resurrects it
+        from base.
+
+    Returns {action: "checkout"|"rm"|"noop", path}. The "noop" case is when
+    the file is already at base content (unusual but possible if a previous
+    edit happened to land at the same bytes).
+    """
+    # Probe whether the path exists in base.
+    try:
+        await _git("cat-file", "-e", f"{base_ref}:{path}")
+        exists_in_base = True
+    except RuntimeError:
+        exists_in_base = False
+
+    if exists_in_base:
+        await _git("checkout", base_ref, "--", path)
+        return {"action": "checkout", "path": path}
+
+    # Not in base → it was added on the draft. Remove it.
+    # `--ignore-unmatch` keeps us silent if the file was already gone.
+    await _git("rm", "-f", "--ignore-unmatch", path)
+    return {"action": "rm", "path": path}
+
+
 async def squash_merge_into(target: str, source: str, message: str) -> str:
     """Squash-merge `source` into `target` and commit. Caller must be on `target`.
     Returns the new HEAD sha."""

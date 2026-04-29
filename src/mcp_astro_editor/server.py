@@ -96,8 +96,8 @@ async def _boot_sequence() -> None:
             # Compose the base path astro should serve from so absolute URLs in
             # responses line up with the platform proxy route. If NB_PROXY_PREFIX
             # is set (e.g., "/v1/apps/synapse-astro-editor/preview"), join it
-            # with the user's astro.config base (e.g., "/bayze-website") so
-            # astro generates URLs like `/v1/apps/.../preview/bayze-website/foo`.
+            # with the user's astro.config base (e.g., "/my-site") so
+            # astro generates URLs like `/v1/apps/.../preview/my-site/foo`.
             proxy_prefix = (os.getenv("NB_PROXY_PREFIX") or "").rstrip("/")
             user_base = (SESSION.profile.base if SESSION.profile else "/").strip()
             if user_base and user_base != "/":
@@ -216,8 +216,8 @@ async def get_workspace_status() -> dict[str, Any]:
 
     proxy_prefix = (os.getenv("NB_PROXY_PREFIX") or "").rstrip("/")
     if proxy_prefix and SESSION.profile:
-        user_root = SESSION.profile.root_path  # e.g. "/bayze-website/" or "/"
-        # Join: /v1/apps/.../preview + /bayze-website/  →  /v1/apps/.../preview/bayze-website/
+        user_root = SESSION.profile.root_path  # e.g. "/my-site/" or "/"
+        # Join: /v1/apps/.../preview + /my-site/  →  /v1/apps/.../preview/my-site/
         status["preview_url"] = (proxy_prefix + user_root).replace("//", "/")
     else:
         status["preview_url"] = None
@@ -404,8 +404,10 @@ async def grep(pattern: str, path: str = ".") -> list[dict]:
 
 @mcp.tool()
 async def render_preview(path: str = "/") -> dict:
-    """Render a page through the internal Astro dev server, flatten its
-    assets, and cache it. The UI fetches the result via get_preview_html."""
+    """Fetch a page from the internal Astro preview server, flatten its
+    assets into a single HTML document, and cache it. Legacy path —
+    the editor UI loads the live preview via the platform's http-proxy
+    instead. Kept for hosts where http-proxy isn't available."""
     await _ensure_ready()
     bytes_ = await _render_and_cache(path)
     return {"path": path, "bytes": bytes_}

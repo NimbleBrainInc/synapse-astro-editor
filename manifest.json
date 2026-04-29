@@ -2,11 +2,30 @@
   "manifest_version": "0.4",
   "name": "@nimblebraininc/synapse-astro-editor",
   "version": "0.1.0",
-  "description": "Natural-language editor for Astro websites. Point it at a GitHub repo; the NimbleBrain chat drives edits via MCP tools. An internal Astro dev subprocess renders the site, and a flattened live preview is served through the MCP Apps ui:// resource spec.",
+  "description": "Natural-language editor for Astro websites. Point the agent at a GitHub repo; chat drives every edit (text, JSX, blog posts, image uploads). The bundle clones the repo, runs astro build+preview, serves the live site through a same-origin proxy, auto-commits each edit, and publishes by squash-merging into the base branch.",
   "author": {
     "name": "NimbleBrain Inc",
-    "email": "hello@nimblebrain.ai"
+    "email": "hello@nimblebrain.ai",
+    "url": "https://nimblebrain.ai"
   },
+  "homepage": "https://github.com/NimbleBrainInc/synapse-astro-editor",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/NimbleBrainInc/synapse-astro-editor"
+  },
+  "license": "MIT",
+  "keywords": [
+    "astro",
+    "synapse",
+    "nimblebrain",
+    "mcp",
+    "website",
+    "editor",
+    "natural-language",
+    "git",
+    "blog",
+    "content"
+  ],
   "server": {
     "type": "python",
     "entry_point": "mcp_astro_editor.server",

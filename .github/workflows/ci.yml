@@ -1,0 +1,52 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  python:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v8.1.0
+        with:
+          enable-cache: true
+
+      - name: Install deps
+        run: uv sync
+
+      - name: ruff (lint)
+        run: uv run ruff check src/
+
+      - name: ruff (format)
+        run: uv run ruff format --check src/
+
+      - name: ty (typecheck)
+        run: uv run ty check src/
+
+  ui:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+
+      - name: Install UI deps
+        run: cd ui && npm ci
+
+      - name: Type check UI
+        run: cd ui && npx tsc --noEmit
+
+      - name: Build UI
+        run: cd ui && npm run build

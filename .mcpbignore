@@ -1,0 +1,39 @@
+# ── Strip anywhere in the tree (generated/OS cruft) ──
+__pycache__/
+*.pyc
+*.pyo
+*.pyi
+.DS_Store
+*.mcpb
+**/*.dist-info/RECORD
+
+# ── Project-only (anchored with / so deps/ is safe) ──
+# Leading `/` means "only at project root". Without it, gitignore
+# patterns match anywhere in the tree — including vendored deps/,
+# which can strip legitimate runtime modules.
+/.venv/
+/.git/
+/.github/
+/.gitignore
+/.mcpbignore
+/.environments/
+/.pytest_cache/
+/.ruff_cache/
+/.ty_cache/
+/tests/
+/test/
+/Makefile
+/uv.lock
+/LICENSE
+/README.md
+
+# ── UI: ship built dist/ only ──
+ui/node_modules/
+ui/src/
+ui/*.ts
+ui/*.json
+ui/index.html
+ui/vite.config.ts
+ui/package-lock.json
+ui/bun.lock
+!ui/dist/

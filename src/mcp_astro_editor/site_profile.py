@@ -35,7 +35,7 @@ class SiteProfile:
     repo_path: str
     has_astro_config: bool = False
     has_content_config: bool = False
-    base: str = "/"  # Astro `base` config — usually "/", but e.g. "/bayze-website"
+    base: str = "/"  # Astro `base` config — usually "/", but e.g. "/my-site"
     pages: list[str] = field(default_factory=list)
     components: list[str] = field(default_factory=list)
     layouts: list[str] = field(default_factory=list)

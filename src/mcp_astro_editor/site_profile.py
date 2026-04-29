@@ -74,9 +74,7 @@ def _list_relative(root: Path, sub: str, suffixes: tuple[str, ...]) -> list[str]
     if not base.exists():
         return []
     return sorted(
-        str(p.relative_to(root))
-        for p in base.rglob("*")
-        if p.is_file() and p.suffix in suffixes
+        str(p.relative_to(root)) for p in base.rglob("*") if p.is_file() and p.suffix in suffixes
     )
 
 
@@ -102,14 +100,18 @@ def _detect_base(repo_path: Path) -> str:
 def scan(repo_path: Path) -> SiteProfile:
     profile = SiteProfile(repo_path=str(repo_path))
 
-    profile.has_astro_config = any((repo_path / f"astro.config.{ext}").exists()
-                                    for ext in ("mjs", "ts", "js"))
-    profile.has_content_config = (repo_path / "src" / "content" / "config.ts").exists() or \
-                                  (repo_path / "src" / "content.config.ts").exists()
+    profile.has_astro_config = any(
+        (repo_path / f"astro.config.{ext}").exists() for ext in ("mjs", "ts", "js")
+    )
+    profile.has_content_config = (repo_path / "src" / "content" / "config.ts").exists() or (
+        repo_path / "src" / "content.config.ts"
+    ).exists()
     profile.base = _detect_base(repo_path)
 
     profile.pages = _list_relative(repo_path, "src/pages", (".astro", ".md", ".mdx"))
-    profile.components = _list_relative(repo_path, "src/components", (".astro", ".tsx", ".jsx", ".vue", ".svelte"))
+    profile.components = _list_relative(
+        repo_path, "src/components", (".astro", ".tsx", ".jsx", ".vue", ".svelte")
+    )
     profile.layouts = _list_relative(repo_path, "src/layouts", (".astro",))
 
     content_dir = repo_path / "src" / "content"
@@ -121,7 +123,8 @@ def scan(repo_path: Path) -> SiteProfile:
             if not d.is_dir() or d.name in skip:
                 continue
             entries = [
-                p.name for p in d.iterdir()
+                p.name
+                for p in d.iterdir()
                 if p.is_file() and p.suffix in (".md", ".mdx", ".json", ".yaml", ".yml")
             ]
             entries.sort()

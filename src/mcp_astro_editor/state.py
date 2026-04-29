@@ -26,7 +26,7 @@ class Session:
     rendered_pages: dict[str, str] = field(default_factory=dict)
     init_error: str | None = None
     # Boot progress state — populated by the background init task.
-    boot_phase: str = "idle"   # idle | cloning | installing | starting | rendering | ready | failed
+    boot_phase: str = "idle"  # idle | cloning | installing | starting | rendering | ready | failed
     boot_started_at: float = 0.0
     boot_finished_at: float = 0.0
     # Build state — populated by _rebuild_preview after every edit. The UI

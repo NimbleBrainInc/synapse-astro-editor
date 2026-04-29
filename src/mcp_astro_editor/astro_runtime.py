@@ -190,6 +190,7 @@ class AstroRuntime:
             except ChildProcessError:
                 break
             import time
+
             time.sleep(0.1)
         else:
             _kill_process_group(self.process.pid, signal.SIGKILL)
@@ -218,6 +219,7 @@ def _kill_orphans_on_port(port: int) -> None:
     # macOS / Linux: shell out to lsof to find PIDs binding the port.
     try:
         import subprocess
+
         result = subprocess.run(
             ["lsof", "-ti", f"tcp:{port}", "-sTCP:LISTEN"],
             capture_output=True,

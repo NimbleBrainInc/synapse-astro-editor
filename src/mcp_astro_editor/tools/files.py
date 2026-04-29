@@ -25,9 +25,7 @@ SKIP_DIRS = frozenset({"node_modules", ".git", "dist", ".astro"})
 
 def _root() -> Path:
     if SESSION.repo_path is None:
-        raise NoRepoError(
-            "Workspace not ready. Configure GITHUB_REPO_URL/GITHUB_TOKEN and retry."
-        )
+        raise NoRepoError("Workspace not ready. Configure GITHUB_REPO_URL/GITHUB_TOKEN and retry.")
     return SESSION.repo_path
 
 
@@ -59,9 +57,7 @@ def edit_file(path: str, old_string: str, new_string: str) -> str:
     if count == 0:
         raise ValueError(f"old_string not found in {path}")
     if count > 1:
-        raise ValueError(
-            f"old_string is not unique in {path} ({count} matches) — narrow it"
-        )
+        raise ValueError(f"old_string is not unique in {path} ({count} matches) — narrow it")
     p.write_text(contents.replace(old_string, new_string, 1), encoding="utf-8")
     return f"edited {path}"
 
@@ -142,7 +138,7 @@ def upload_asset(filename: str, base64_data: str, dest_dir: str = "public/upload
     root = _root().resolve()
     rel = str(target_resolved.relative_to(root))
     if rel.startswith("public/"):
-        url = "/" + rel[len("public/"):]
+        url = "/" + rel[len("public/") :]
     else:
         url = rel
     return {
@@ -229,10 +225,9 @@ def grep(pattern: str, path: str = ".", max_results: int = 100) -> list[dict]:
     p = _resolve(path)
     regex = re.compile(pattern)
     hits: list[dict] = []
-    targets = [p] if p.is_file() else [
-        f for f in p.rglob("*")
-        if f.is_file() and not _is_skipped(f)
-    ]
+    targets = (
+        [p] if p.is_file() else [f for f in p.rglob("*") if f.is_file() and not _is_skipped(f)]
+    )
     root = _root().resolve()
     for f in targets:
         try:

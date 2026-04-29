@@ -39,8 +39,8 @@ class ConfigError(WorkspaceError):
 
 @dataclass(frozen=True)
 class RepoConfig:
-    repo_url: str          # https://github.com/owner/repo (no token, no .git)
-    token: str             # PAT
+    repo_url: str  # https://github.com/owner/repo (no token, no .git)
+    token: str  # PAT
     draft_branch: str
     base_branch: str
     owner: str
@@ -50,9 +50,7 @@ class RepoConfig:
     def clone_url(self) -> str:
         """URL with token embedded for HTTPS auth. Never log this."""
         parsed = urlparse(self.repo_url)
-        return urlunparse(parsed._replace(
-            netloc=f"x-access-token:{self.token}@{parsed.netloc}"
-        ))
+        return urlunparse(parsed._replace(netloc=f"x-access-token:{self.token}@{parsed.netloc}"))
 
     @property
     def public_url(self) -> str:
@@ -102,16 +100,15 @@ def load_config() -> RepoConfig:
 
 
 def workspace_root() -> Path:
-    base = os.getenv("MPAK_WORKSPACE") or str(
-        Path(tempfile.gettempdir()) / "synapse-astro-editor"
-    )
+    base = os.getenv("MPAK_WORKSPACE") or str(Path(tempfile.gettempdir()) / "synapse-astro-editor")
     return Path(base).expanduser().resolve() / "repo"
 
 
 async def _git(*args: str, cwd: Path | None = None) -> str:
     """Run git; raise WorkspaceError on failure with token scrubbed from output."""
     proc = await asyncio.create_subprocess_exec(
-        "git", *args,
+        "git",
+        *args,
         cwd=str(cwd) if cwd else None,
         stdin=asyncio.subprocess.DEVNULL,
         stdout=asyncio.subprocess.PIPE,
@@ -168,8 +165,10 @@ async def ensure_workspace() -> Path:
     # Token lives in the extraheader, not in .git/config — gets threaded
     # through on every fetch/push so it stays off disk.
     await _git(
-        "-c", f"http.extraheader={cfg.http_extraheader}",
-        "fetch", "origin",
+        "-c",
+        f"http.extraheader={cfg.http_extraheader}",
+        "fetch",
+        "origin",
         cwd=repo_dir,
     )
 
@@ -177,11 +176,17 @@ async def ensure_workspace() -> Path:
     branches = await _git("branch", "--list", cfg.draft_branch, cwd=repo_dir)
     if not branches.strip():
         # Is there a remote draft?
-        remote_drafts = await _git("branch", "-r", "--list", f"origin/{cfg.draft_branch}", cwd=repo_dir)
+        remote_drafts = await _git(
+            "branch", "-r", "--list", f"origin/{cfg.draft_branch}", cwd=repo_dir
+        )
         if remote_drafts.strip():
-            await _git("checkout", "-b", cfg.draft_branch, f"origin/{cfg.draft_branch}", cwd=repo_dir)
+            await _git(
+                "checkout", "-b", cfg.draft_branch, f"origin/{cfg.draft_branch}", cwd=repo_dir
+            )
         else:
-            await _git("checkout", "-b", cfg.draft_branch, f"origin/{cfg.base_branch}", cwd=repo_dir)
+            await _git(
+                "checkout", "-b", cfg.draft_branch, f"origin/{cfg.base_branch}", cwd=repo_dir
+            )
     else:
         await _git("checkout", cfg.draft_branch, cwd=repo_dir)
 

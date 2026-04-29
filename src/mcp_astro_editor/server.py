@@ -54,6 +54,7 @@ def astro_editor_skill() -> str:
     minimal edits, build-failure recovery, publish flow."""
     return SKILL_CONTENT
 
+
 _init_lock = asyncio.Lock()
 _boot_task: asyncio.Task | None = None
 
@@ -126,6 +127,7 @@ async def _boot_sequence() -> None:
         SESSION.init_error = repr(exc)
         SESSION.boot_phase = "failed"
         import traceback
+
         _log(f"FAILED at phase={SESSION.boot_phase} err={exc!r}")
         traceback.print_exc(file=sys.stderr)
         sys.stderr.flush()
@@ -329,7 +331,9 @@ async def multi_edit_file(path: str, edits: list[dict]) -> dict:
     """
     await _ensure_ready()
     files_tools.multi_edit_file(path, edits)
-    sha = await git_ops.auto_commit(f"multi-edit {path} ({len(edits)} change{'s' if len(edits) != 1 else ''})")
+    sha = await git_ops.auto_commit(
+        f"multi-edit {path} ({len(edits)} change{'s' if len(edits) != 1 else ''})"
+    )
     rebuild_status = await _rebuild_preview()
     return {
         "path": path,
@@ -606,9 +610,7 @@ async def publish(message: str = "") -> dict:
         await git_ops.push(cfg.draft_branch)
         title = message or _summarize(commits)
         try:
-            pr = await github_api.ensure_pr(
-                cfg, title=title, body=_pr_body(commits)
-            )
+            pr = await github_api.ensure_pr(cfg, title=title, body=_pr_body(commits))
             return {
                 "published": True,
                 "mode": "pr",
@@ -631,9 +633,7 @@ async def _ship(cfg: ws_mod.RepoConfig, commits: list[dict], message: str) -> di
     await git_ops.checkout(cfg.base_branch)
     try:
         await git_ops.reset_hard(f"origin/{cfg.base_branch}")
-        new_sha = await git_ops.squash_merge_into(
-            cfg.base_branch, cfg.draft_branch, full_message
-        )
+        new_sha = await git_ops.squash_merge_into(cfg.base_branch, cfg.draft_branch, full_message)
         await git_ops.push(cfg.base_branch)
         # Reset draft so it tracks the new base — clean slate for next round.
         await git_ops.checkout(cfg.draft_branch)

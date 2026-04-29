@@ -106,9 +106,7 @@ async def list_commits_ahead(branch: str, base_ref: str) -> list[dict]:
         parts = line.split("\x1f")
         if len(parts) != 4:
             continue
-        rows.append(
-            {"sha": parts[0], "short_sha": parts[1], "message": parts[2], "when": parts[3]}
-        )
+        rows.append({"sha": parts[0], "short_sha": parts[1], "message": parts[2], "when": parts[3]})
     return rows
 
 

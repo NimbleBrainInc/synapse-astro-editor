@@ -47,11 +47,13 @@ type WorkspaceStatus = {
   profile: SiteProfile | null;
   /** Same-origin URL the UI should iframe, or null if proxy not wired. */
   preview_url: string | null;
-  /** Result of the most recent post-edit rebuild. `null` until the first
-   *  edit; "ok" / "failed" thereafter. The preview iframe still serves
-   *  the LAST successful build, so when this is "failed" the user sees
-   *  a stale page — the banner is what tells them why. */
-  last_build_status: "ok" | "failed" | null;
+  /** Result of the most recent post-edit rebuild.
+   *  `null` until the first edit, `"building"` while a rebuild is in
+   *  flight (server-side state), `"ok"` / `"failed"` after.
+   *  The preview iframe still serves the LAST successful build, so when
+   *  this is `"failed"` the user sees a stale page — the error banner is
+   *  what tells them why. */
+  last_build_status: "ok" | "failed" | "building" | null;
   last_build_error: string | null;
   last_build_at: number;
 };
@@ -93,6 +95,26 @@ type ChangedFilesResult = {
   files: ChangedFile[];
 };
 
+type PublishPreview = {
+  mode: "ship" | "pr";
+  draft_branch: string;
+  base_branch: string;
+  commit_count: number;
+  file_count: number;
+  files: ChangedFile[];
+  commits: PendingChange[];
+  summary: string;
+};
+
+type UploadAssetResult = {
+  path: string;
+  url: string;
+  bytes: number;
+  committed: boolean;
+  sha: string | null;
+  preview: string;
+};
+
 type PublishResult =
   | { published: false; reason: string }
   | {
@@ -120,7 +142,9 @@ function AstroEditor() {
   const revertFileTool = useCallTool<{ path: string; action: string }>(
     "revert_file_to_base",
   );
+  const publishPreviewTool = useCallTool<PublishPreview>("get_publish_preview");
   const publishTool = useCallTool<PublishResult>("publish");
+  const uploadAssetTool = useCallTool<UploadAssetResult>("upload_asset");
 
   const [status, setStatus] = useState<WorkspaceStatus | null>(null);
   const [iframeStamp, setIframeStamp] = useState(0);
@@ -136,6 +160,12 @@ function AstroEditor() {
   const [currentPage, setCurrentPage] = useState<{ path: string; title: string } | null>(
     null,
   );
+  // Publish-confirm modal — when populated, the dialog is open. We fetch
+  // the preview on click and only call `publish` after explicit confirm.
+  const [publishPreview, setPublishPreview] = useState<PublishPreview | null>(null);
+  // Drag-drop upload feedback.
+  const [uploadedAssetUrl, setUploadedAssetUrl] = useState<string | null>(null);
+  const [uploadDropActive, setUploadDropActive] = useState(false);
 
   const bootKickedRef = useRef(false);
 
@@ -216,7 +246,21 @@ function AstroEditor() {
     }
   }
 
-  async function handlePublish() {
+  // Two-step publish: open the confirm modal with a paraphrased scope,
+  // then actually ship on confirm. Without this, click-Publish was a
+  // direct ship-to-prod action that's surprising for non-technical users.
+  async function handlePublishClick() {
+    setError(null);
+    try {
+      const r = await publishPreviewTool.call({});
+      setPublishPreview(r.data);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "publish preview failed");
+    }
+  }
+
+  async function handleConfirmPublish() {
+    setPublishPreview(null);
     setError(null);
     try {
       const r = await publishTool.call({});
@@ -231,9 +275,55 @@ function AstroEditor() {
         setToast("Published");
       }
       setTimeout(() => setToast(null), 4000);
+      refreshStatus();
       refreshPending();
+      refreshChangedFiles();
     } catch (e) {
       setError(e instanceof Error ? e.message : "publish failed");
+    }
+  }
+
+  async function handleAssetDrop(files: FileList | null) {
+    setUploadDropActive(false);
+    if (!files || files.length === 0) return;
+    const file = files[0];
+    if (!file) return;
+    // 750 KB binary → ~1 MB JSON in tool args. Hard cap matches the
+    // platform's tool-call limit; any larger and the request is silently
+    // truncated by the bridge.
+    const MAX_BYTES = 750 * 1024;
+    if (file.size > MAX_BYTES) {
+      setError(
+        `Image is ${(file.size / 1024).toFixed(0)} KB — please resize to under 750 KB and try again.`,
+      );
+      return;
+    }
+    try {
+      const dataUrl = await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(reader.result as string);
+        reader.onerror = () => reject(reader.error ?? new Error("read failed"));
+        reader.readAsDataURL(file);
+      });
+      // Strip the `data:<mime>;base64,` prefix; the server tolerates it
+      // either way but the explicit form keeps logs clean.
+      const comma = dataUrl.indexOf(",");
+      const base64Data = comma >= 0 ? dataUrl.slice(comma + 1) : dataUrl;
+      // Sanitize the filename to match the server's allow-list (letters,
+      // digits, dot, underscore, dash). Any other character → underscore.
+      const safeName = file.name.replace(/[^A-Za-z0-9._-]/g, "_") || "asset";
+      const r = await uploadAssetTool.call({
+        filename: safeName,
+        base64_data: base64Data,
+      });
+      setUploadedAssetUrl(r.data.url);
+      setToast(`Uploaded ${safeName} → ${r.data.url}`);
+      setTimeout(() => setToast(null), 5000);
+      refreshStatus();
+      refreshPending();
+      refreshChangedFiles();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "upload failed");
     }
   }
 
@@ -288,6 +378,20 @@ function AstroEditor() {
     }
   });
 
+  // Poll status while a build is in flight. The bundle sets
+  // `last_build_status = "building"` on rebuild entry and clears it on
+  // exit. Without polling we'd only learn the build started AFTER the
+  // tool result arrives (via `useDataSync`), by which point the rebuild
+  // is already done — agent-initiated edits would never show a spinner.
+  // Cheap: one HTTP call per second only while building. Stops as soon
+  // as status flips to "ok" / "failed" / null.
+  useEffect(() => {
+    if (status?.last_build_status !== "building") return;
+    const t = setInterval(refreshStatus, 1000);
+    return () => clearInterval(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [status?.last_build_status]);
+
   // Push the page the user is currently viewing into the agent's per-turn
   // context. The host wraps this in containment so the agent reads it as
   // "the user is currently viewing X" without us having to add a tool call.
@@ -334,15 +438,17 @@ function AstroEditor() {
   const phase = status?.boot_phase ?? "idle";
   const isReady = phase === "ready";
   const isBooting = !!status && phase !== "ready" && phase !== "failed";
-  // True while any UI-initiated tool that triggers a rebuild is in flight.
-  // Used to overlay a "Rebuilding preview…" indicator on the preview pane
-  // so the user has visible feedback during the 5-30s `astro build`.
-  // Agent-initiated edits aren't tracked here today — they run inside the
-  // chat panel's own loop, not this iframe's `useCallTool` calls. Wiring
-  // them up would need a `building` tri-state on `last_build_status` plus
-  // a polling cadence; deferred for a follow-up.
+  // True while any UI-initiated tool that triggers a rebuild is in flight,
+  // OR while the server reports a rebuild in progress (set inside
+  // `_rebuild_preview`). The server-side flag covers agent-initiated edits
+  // that go through the chat panel — those don't pass through this
+  // iframe's `useCallTool`, so we'd otherwise miss them. The polling
+  // effect below keeps the flag fresh during long builds.
   const isRebuilding =
-    undoTool.isPending || revertFileTool.isPending || publishTool.isPending;
+    undoTool.isPending ||
+    revertFileTool.isPending ||
+    publishTool.isPending ||
+    status?.last_build_status === "building";
 
   return (
     <div
@@ -411,9 +517,20 @@ function AstroEditor() {
           {undoTool.isPending ? "Undoing…" : "Undo"}
         </button>
         <button
-          onClick={handlePublish}
-          disabled={publishTool.isPending || !pending || pending.count === 0}
-          style={primaryBtn(accent, publishTool.isPending || !pending || pending.count === 0)}
+          onClick={handlePublishClick}
+          disabled={
+            publishTool.isPending ||
+            publishPreviewTool.isPending ||
+            !pending ||
+            pending.count === 0
+          }
+          style={primaryBtn(
+            accent,
+            publishTool.isPending ||
+              publishPreviewTool.isPending ||
+              !pending ||
+              pending.count === 0,
+          )}
         >
           {publishTool.isPending ? "Publishing…" : "Publish"}
         </button>
@@ -451,6 +568,31 @@ function AstroEditor() {
 
       <div style={{ display: "flex", flex: 1, minWidth: 0, minHeight: 0 }}>
         <main
+          onDragEnter={(e) => {
+            // Show the drop-zone overlay only when files are actually
+            // being dragged. Without this guard, every internal drag
+            // (e.g., text selection) would flash the overlay.
+            if (e.dataTransfer?.types?.includes("Files")) {
+              e.preventDefault();
+              setUploadDropActive(true);
+            }
+          }}
+          onDragOver={(e) => {
+            if (e.dataTransfer?.types?.includes("Files")) {
+              e.preventDefault();
+              e.dataTransfer.dropEffect = "copy";
+            }
+          }}
+          onDragLeave={(e) => {
+            // Only clear when we leave the <main> entirely. Bubbling
+            // dragleave from child elements would otherwise flicker.
+            if (e.currentTarget === e.target) setUploadDropActive(false);
+          }}
+          onDrop={(e) => {
+            if (!e.dataTransfer?.types?.includes("Files")) return;
+            e.preventDefault();
+            handleAssetDrop(e.dataTransfer.files);
+          }}
           style={{
             // `flex: 1` paired with `minWidth: 0` is the canonical "fill the
             // remaining flex track without growing past it." Default flex
@@ -536,6 +678,33 @@ function AstroEditor() {
                     bg={bg}
                   />
                 )}
+              {uploadDropActive && (
+                <DropZoneOverlay
+                  bg={bg}
+                  fg={fg}
+                  muted={muted}
+                  accent={accent}
+                />
+              )}
+              {uploadAssetTool.isPending && (
+                <UploadingOverlay
+                  bg={bg}
+                  fg={fg}
+                  muted={muted}
+                  accent={accent}
+                  border={border}
+                />
+              )}
+              {uploadedAssetUrl && !uploadAssetTool.isPending && (
+                <UploadedToast
+                  url={uploadedAssetUrl}
+                  onDismiss={() => setUploadedAssetUrl(null)}
+                  bg={bg}
+                  fg={fg}
+                  muted={muted}
+                  border={border}
+                />
+              )}
             </>
           ) : (
             <CenterMessage muted={muted}>
@@ -544,6 +713,24 @@ function AstroEditor() {
           )}
         </main>
       </div>
+      {publishPreview && (
+        <PublishConfirmModal
+          preview={publishPreview}
+          onConfirm={handleConfirmPublish}
+          onCancel={() => setPublishPreview(null)}
+          isPublishing={publishTool.isPending}
+          bg={bg}
+          bgSubtle={bgSubtle}
+          fg={fg}
+          muted={muted}
+          accent={accent}
+          border={border}
+          successFg={successFg}
+          infoFg={infoFg}
+          dangerFg={dangerFg}
+          warningFg={warningFg}
+        />
+      )}
     </div>
   );
 }
@@ -1198,6 +1385,358 @@ function RebuildingOverlay({
         Astro builds usually finish in a few seconds.
       </div>
       <style>{"@keyframes nb-spin { to { transform: rotate(360deg); } }"}</style>
+    </div>
+  );
+}
+
+function DropZoneOverlay({
+  bg,
+  fg,
+  muted,
+  accent,
+}: {
+  bg: string;
+  fg: string;
+  muted: string;
+  accent: string;
+}) {
+  return (
+    <div
+      style={{
+        position: "absolute",
+        inset: 0,
+        background: `${bg}dd`,
+        display: "flex",
+        flexDirection: "column",
+        alignItems: "center",
+        justifyContent: "center",
+        gap: ".4rem",
+        zIndex: 30,
+        pointerEvents: "none",
+      }}
+    >
+      <div
+        style={{
+          padding: "2rem 3rem",
+          border: `2px dashed ${accent}`,
+          borderRadius: 12,
+          background: bg,
+          textAlign: "center",
+        }}
+      >
+        <div style={{ color: fg, fontSize: "1rem", fontWeight: 600 }}>
+          Drop image to upload
+        </div>
+        <div style={{ color: muted, fontSize: ".78rem", marginTop: ".4rem" }}>
+          Saves under <code>public/uploads/</code> and auto-commits.
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function UploadingOverlay({
+  bg,
+  fg,
+  muted,
+  accent,
+  border,
+}: {
+  bg: string;
+  fg: string;
+  muted: string;
+  accent: string;
+  border: string;
+}) {
+  return (
+    <div
+      role="status"
+      aria-live="polite"
+      style={{
+        position: "absolute",
+        inset: 0,
+        background: `${bg}cc`,
+        display: "flex",
+        flexDirection: "column",
+        alignItems: "center",
+        justifyContent: "center",
+        gap: ".5rem",
+        zIndex: 25,
+      }}
+    >
+      <div
+        style={{
+          width: 28,
+          height: 28,
+          borderRadius: "50%",
+          border: `2px solid ${border}`,
+          borderTopColor: accent,
+          animation: "nb-spin 0.7s linear infinite",
+        }}
+      />
+      <div style={{ color: fg, fontSize: ".85rem", fontWeight: 500 }}>
+        Uploading…
+      </div>
+      <div style={{ color: muted, fontSize: ".72rem" }}>
+        Encoding bytes and committing.
+      </div>
+    </div>
+  );
+}
+
+function UploadedToast({
+  url,
+  onDismiss,
+  bg,
+  fg,
+  muted,
+  border,
+}: {
+  url: string;
+  onDismiss: () => void;
+  bg: string;
+  fg: string;
+  muted: string;
+  border: string;
+}) {
+  return (
+    <div
+      style={{
+        position: "absolute",
+        bottom: "1rem",
+        left: "50%",
+        transform: "translateX(-50%)",
+        padding: ".55rem .85rem",
+        background: bg,
+        border: `1px solid ${border}`,
+        borderRadius: 8,
+        boxShadow: "0 4px 16px rgba(0,0,0,.08)",
+        display: "flex",
+        gap: ".55rem",
+        alignItems: "center",
+        fontSize: ".78rem",
+        zIndex: 30,
+      }}
+    >
+      <span style={{ color: fg }}>Uploaded</span>
+      <code
+        style={{
+          color: muted,
+          fontFamily:
+            "var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace)",
+          fontSize: ".75rem",
+        }}
+      >
+        {url}
+      </code>
+      <button
+        onClick={() => {
+          navigator.clipboard?.writeText(url).catch(() => {});
+        }}
+        style={{
+          padding: ".2rem .5rem",
+          borderRadius: 4,
+          border: `1px solid ${border}`,
+          background: "transparent",
+          color: fg,
+          fontSize: ".72rem",
+          cursor: "pointer",
+        }}
+        title="Copy URL to clipboard"
+      >
+        Copy
+      </button>
+      <button
+        onClick={onDismiss}
+        style={{
+          padding: ".2rem .5rem",
+          borderRadius: 4,
+          border: "none",
+          background: "transparent",
+          color: muted,
+          fontSize: ".9rem",
+          cursor: "pointer",
+        }}
+        title="Dismiss"
+      >
+        ×
+      </button>
+    </div>
+  );
+}
+
+function PublishConfirmModal({
+  preview,
+  onConfirm,
+  onCancel,
+  isPublishing,
+  bg,
+  bgSubtle,
+  fg,
+  muted,
+  accent,
+  border,
+  successFg,
+  infoFg,
+  dangerFg,
+  warningFg,
+}: {
+  preview: PublishPreview;
+  onConfirm: () => void;
+  onCancel: () => void;
+  isPublishing: boolean;
+  bg: string;
+  bgSubtle: string;
+  fg: string;
+  muted: string;
+  accent: string;
+  border: string;
+  successFg: string;
+  infoFg: string;
+  dangerFg: string;
+  warningFg: string;
+}) {
+  return (
+    <div
+      role="dialog"
+      aria-modal="true"
+      style={{
+        position: "fixed",
+        inset: 0,
+        background: "rgba(0,0,0,.45)",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        zIndex: 100,
+        padding: "1rem",
+      }}
+      onClick={(e) => {
+        // Click on the backdrop (not the dialog) to dismiss.
+        if (e.target === e.currentTarget && !isPublishing) onCancel();
+      }}
+    >
+      <div
+        style={{
+          background: bg,
+          color: fg,
+          borderRadius: 10,
+          width: "min(560px, 100%)",
+          maxHeight: "85vh",
+          display: "flex",
+          flexDirection: "column",
+          boxShadow: "0 20px 60px rgba(0,0,0,.25)",
+          overflow: "hidden",
+        }}
+      >
+        <div
+          style={{
+            padding: "1rem 1.25rem .75rem",
+            borderBottom: `1px solid ${border}`,
+            background: bgSubtle,
+          }}
+        >
+          <div style={{ fontSize: "1.05rem", fontWeight: 600 }}>
+            {preview.mode === "ship" ? "Publish to" : "Open PR against"}{" "}
+            <code
+              style={{
+                fontFamily:
+                  "var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace)",
+              }}
+            >
+              {preview.base_branch}
+            </code>
+            ?
+          </div>
+          <div style={{ color: muted, fontSize: ".82rem", marginTop: ".25rem" }}>
+            {preview.summary}
+          </div>
+        </div>
+        <div
+          style={{
+            flex: 1,
+            overflow: "auto",
+            padding: ".4rem 0",
+          }}
+        >
+          {preview.files.length === 0 ? (
+            <div style={{ padding: "1.5rem 1.25rem", color: muted, textAlign: "center" }}>
+              No file changes detected.
+            </div>
+          ) : (
+            preview.files.map((f) => (
+              <div
+                key={f.path}
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: ".75rem",
+                  padding: ".4rem 1.25rem",
+                  borderBottom: `1px solid ${border}`,
+                }}
+              >
+                <StatusBadge
+                  status={f.status}
+                  muted={muted}
+                  successFg={successFg}
+                  infoFg={infoFg}
+                  dangerFg={dangerFg}
+                  warningFg={warningFg}
+                  accent={accent}
+                />
+                <code
+                  style={{
+                    flex: 1,
+                    color: fg,
+                    fontFamily:
+                      "var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace)",
+                    fontSize: ".78rem",
+                    wordBreak: "break-all",
+                  }}
+                >
+                  {f.path}
+                </code>
+              </div>
+            ))
+          )}
+        </div>
+        <div
+          style={{
+            padding: ".75rem 1.25rem",
+            borderTop: `1px solid ${border}`,
+            display: "flex",
+            justifyContent: "flex-end",
+            gap: ".5rem",
+            background: bgSubtle,
+          }}
+        >
+          <button
+            onClick={onCancel}
+            disabled={isPublishing}
+            style={{
+              padding: ".4rem .9rem",
+              borderRadius: 6,
+              border: `1px solid ${border}`,
+              background: bg,
+              color: fg,
+              fontSize: ".82rem",
+              cursor: isPublishing ? "wait" : "pointer",
+            }}
+          >
+            Cancel
+          </button>
+          <button
+            onClick={onConfirm}
+            disabled={isPublishing || preview.file_count === 0}
+            style={primaryBtn(accent, isPublishing || preview.file_count === 0)}
+          >
+            {isPublishing
+              ? "Publishing…"
+              : preview.mode === "ship"
+                ? "Ship it"
+                : "Open PR"}
+          </button>
+        </div>
+      </div>
     </div>
   );
 }

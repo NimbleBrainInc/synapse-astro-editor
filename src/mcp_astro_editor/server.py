@@ -420,8 +420,21 @@ async def revert_file_to_base(path: str) -> dict:
 
 @mcp.tool()
 async def undo_last_change() -> dict:
-    """Revert the most recent commit on the draft branch and rebuild the
-    preview so the iframe shows the reverted state."""
+    """Pop the most recent commit off the draft branch and rebuild the
+    preview. Behaves like a stack pop, not a forward revert: the commit
+    leaves the branch's history rather than getting a `revert-X` commit
+    layered on top.
+
+    Why pop and not revert: the draft branch is ephemeral until publish,
+    and `git revert` creates a new forward commit that reverses the target.
+    With revert, calling Undo twice produces `revert-X, revert-revert-X`
+    — the second Undo puts X back instead of going further down the stack.
+    Pop matches the user's mental model.
+
+    For arbitrary mid-history reverts, use `revert_change(sha)` (which
+    intentionally uses `git revert` and stacks a new commit) — pop only
+    works at the top.
+    """
     await _ensure_ready()
     cfg = ws_mod.load_config()
     base_ref = f"origin/{cfg.base_branch}"
@@ -429,11 +442,14 @@ async def undo_last_change() -> dict:
     if not commits:
         return {"reverted": None, "message": "Nothing to undo."}
     latest = commits[-1]
-    new_sha = await git_ops.revert(latest["sha"])
+    # `commits` lists commits ahead of base, oldest first. After popping
+    # the top, reset target is either the previous draft commit or the
+    # base ref itself when popping the only remaining commit.
+    target = commits[-2]["sha"] if len(commits) > 1 else base_ref
+    await git_ops.reset_hard(target)
     rebuild_status = await _rebuild_preview()
     return {
         "reverted": latest["sha"],
-        "new_sha": new_sha,
         "message": latest["message"],
         "preview": rebuild_status,
     }

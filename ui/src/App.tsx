@@ -46,6 +46,13 @@ type WorkspaceStatus = {
   profile: SiteProfile | null;
   /** Same-origin URL the UI should iframe, or null if proxy not wired. */
   preview_url: string | null;
+  /** Result of the most recent post-edit rebuild. `null` until the first
+   *  edit; "ok" / "failed" thereafter. The preview iframe still serves
+   *  the LAST successful build, so when this is "failed" the user sees
+   *  a stale page — the banner is what tells them why. */
+  last_build_status: "ok" | "failed" | null;
+  last_build_error: string | null;
+  last_build_at: number;
 };
 
 const PHASE_LABEL: Record<BootPhase, string> = {
@@ -153,6 +160,7 @@ function AstroEditor() {
       if (r.data.reverted) setToast("Undid the last change");
       else setToast("Nothing to undo");
       setTimeout(() => setToast(null), 3000);
+      refreshStatus();
       refreshPreview();
       refreshPending();
     } catch (e) {
@@ -166,6 +174,7 @@ function AstroEditor() {
       await revertTool.call({ sha });
       setToast("Change reverted");
       setTimeout(() => setToast(null), 3000);
+      refreshStatus();
       refreshPreview();
       refreshPending();
     } catch (e) {
@@ -232,9 +241,12 @@ function AstroEditor() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [status?.boot_phase]);
 
-  // Re-render preview + refresh pending whenever the agent calls a tool.
+  // Re-render preview + refresh pending + refresh status whenever the agent
+  // calls a tool. Status refresh is what flips the build-error banner on/off
+  // when an edit succeeds or fails.
   useDataSync(() => {
     if (status?.boot_phase === "ready") {
+      refreshStatus();
       refreshPreview();
       refreshPending();
     }
@@ -289,7 +301,6 @@ function AstroEditor() {
           open={pendingOpen}
           onToggle={() => setPendingOpen((v) => !v)}
           muted={muted}
-          border={border}
           accent={accent}
         />
         <div style={{ flex: 1 }} />
@@ -410,11 +421,20 @@ function AstroEditor() {
               Astro dev server is not running. Check status pill.
             </CenterMessage>
           ) : status?.preview_url ? (
-            <ScaledPreview
-              src={`${status.preview_url}?_=${iframeStamp}`}
-              iframeKey={iframeStamp}
-              bg={bg}
-            />
+            <>
+              <ScaledPreview
+                src={`${status.preview_url}?_=${iframeStamp}`}
+                iframeKey={iframeStamp}
+                bg={bg}
+              />
+              {status.last_build_status === "failed" && status.last_build_error && (
+                <BuildErrorBanner
+                  error={status.last_build_error}
+                  onRevert={handleUndo}
+                  isReverting={undoTool.isPending}
+                />
+              )}
+            </>
           ) : (
             <CenterMessage muted={muted}>
               No preview URL — check that the http-proxy declaration is wired.
@@ -472,14 +492,12 @@ function PendingPill({
   open,
   onToggle,
   muted,
-  border,
   accent,
 }: {
   pending: PendingResult | null;
   open: boolean;
   onToggle: () => void;
   muted: string;
-  border: string;
   accent: string;
 }) {
   if (!pending) return null;
@@ -798,6 +816,76 @@ function CenterMessage({
       }}
     >
       {children}
+    </div>
+  );
+}
+
+function BuildErrorBanner({
+  error,
+  onRevert,
+  isReverting,
+}: {
+  error: string;
+  onRevert: () => void;
+  isReverting: boolean;
+}) {
+  // Astro build errors are usually multi-line, with the last few lines being
+  // the actionable bit (file + line + reason). Show them all but cap height.
+  return (
+    <div
+      style={{
+        position: "absolute",
+        top: 0,
+        left: 0,
+        right: 0,
+        background: "#fef2f2",
+        borderBottom: "1px solid #fecaca",
+        color: "#991b1b",
+        padding: ".55rem .85rem",
+        fontSize: ".78rem",
+        display: "flex",
+        gap: ".75rem",
+        alignItems: "flex-start",
+        boxShadow: "0 2px 6px rgba(153, 27, 27, .08)",
+        zIndex: 10,
+      }}
+    >
+      <div style={{ flexShrink: 0, fontWeight: 600 }}>Build failed</div>
+      <pre
+        style={{
+          flex: 1,
+          minWidth: 0,
+          margin: 0,
+          maxHeight: "6.5rem",
+          overflow: "auto",
+          fontFamily:
+            "var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace)",
+          fontSize: ".72rem",
+          lineHeight: 1.4,
+          whiteSpace: "pre-wrap",
+          wordBreak: "break-word",
+        }}
+      >
+        {error}
+      </pre>
+      <button
+        onClick={onRevert}
+        disabled={isReverting}
+        style={{
+          flexShrink: 0,
+          padding: ".3rem .65rem",
+          borderRadius: 4,
+          border: "1px solid #fecaca",
+          background: "#fff",
+          color: "#991b1b",
+          fontSize: ".75rem",
+          cursor: isReverting ? "wait" : "pointer",
+          opacity: isReverting ? 0.6 : 1,
+        }}
+        title="Revert the last commit on the draft branch and rebuild"
+      >
+        {isReverting ? "Reverting…" : "Revert last edit"}
+      </button>
     </div>
   );
 }

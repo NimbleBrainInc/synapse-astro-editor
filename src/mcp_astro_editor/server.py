@@ -194,6 +194,9 @@ async def get_workspace_status() -> dict[str, Any]:
     status["boot_started_at"] = SESSION.boot_started_at
     status["boot_finished_at"] = SESSION.boot_finished_at
     status["profile"] = SESSION.profile.to_dict() if SESSION.profile else None
+    status["last_build_status"] = SESSION.last_build_status
+    status["last_build_error"] = SESSION.last_build_error
+    status["last_build_at"] = SESSION.last_build_at
 
     proxy_prefix = (os.getenv("NB_PROXY_PREFIX") or "").rstrip("/")
     if proxy_prefix and SESSION.profile:
@@ -265,14 +268,25 @@ async def _rebuild_preview() -> str:
     Returns "rebuilt" / "skipped (runtime down)" / "failed: <message>".
     Never raises — a build failure shouldn't block the file edit from
     being committed; the user can fix the broken edit, retry, or revert.
+
+    Also persists the result on SESSION (`last_build_*`) so the UI can
+    render a banner without depending on the most recent tool result.
     """
     if SESSION.runtime is None:
+        # Runtime down isn't a build failure — leave last_build_status alone
+        # so the UI doesn't flip from "ok" to "failed" on an unrelated edit.
         return "skipped (runtime down)"
     try:
         await SESSION.runtime.rebuild()
+        SESSION.last_build_status = "ok"
+        SESSION.last_build_error = None
+        SESSION.last_build_at = time.time()
         return "rebuilt"
     except Exception as exc:
         msg = str(exc)
+        SESSION.last_build_status = "failed"
+        SESSION.last_build_error = msg
+        SESSION.last_build_at = time.time()
         # Surface the error in the response without crashing the bundle.
         return f"failed: {msg[:300]}"
 

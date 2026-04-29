@@ -29,6 +29,12 @@ class Session:
     boot_phase: str = "idle"   # idle | cloning | installing | starting | rendering | ready | failed
     boot_started_at: float = 0.0
     boot_finished_at: float = 0.0
+    # Build state — populated by _rebuild_preview after every edit. The UI
+    # polls these via get_workspace_status to render a build-failed banner
+    # without having to remember the most recent edit's tool result.
+    last_build_status: str | None = None  # None | "ok" | "failed"
+    last_build_error: str | None = None
+    last_build_at: float = 0.0
 
 
 SESSION = Session()

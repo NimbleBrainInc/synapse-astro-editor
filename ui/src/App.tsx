@@ -314,14 +314,35 @@ function AstroEditor() {
   const bg = theme.tokens["--color-background-primary"] || "#fff";
   const bgSubtle = theme.tokens["--color-background-secondary"] || "#f9fafb";
   const border = theme.tokens["--color-border-primary"] || "#e5e7eb";
-  const accent = theme.tokens["--color-text-accent"] || "#2563eb";
+  // Synapse exposes the host's accent color separately from `tokens` — there
+  // is no `--color-text-accent` in the canonical set. `primaryColor` is the
+  // right surface for "the host's brand color."
+  const accent = theme.primaryColor || "#2563eb";
   const muted = theme.tokens["--color-text-secondary"] || "#6b7280";
+  // Semantic tokens for state-coloured surfaces (build errors, status badges).
+  // Fall back to hand-picked Tailwind values when the host doesn't inject the
+  // semantic set; keeps us from going completely unstyled on minimal hosts.
+  const dangerBg = theme.tokens["--color-background-danger"] || "#fef2f2";
+  const dangerBorder = theme.tokens["--color-border-danger"] || "#fecaca";
+  const dangerFg = theme.tokens["--color-text-danger"] || "#991b1b";
+  const successFg = theme.tokens["--color-text-success"] || "#16a34a";
+  const infoFg = theme.tokens["--color-text-info"] || "#2563eb";
+  const warningFg = theme.tokens["--color-text-warning"] || "#ca8a04";
 
   const profile = status?.profile ?? null;
   const runtime = status?.runtime ?? "stopped";
   const phase = status?.boot_phase ?? "idle";
   const isReady = phase === "ready";
   const isBooting = !!status && phase !== "ready" && phase !== "failed";
+  // True while any UI-initiated tool that triggers a rebuild is in flight.
+  // Used to overlay a "Rebuilding preview…" indicator on the preview pane
+  // so the user has visible feedback during the 5-30s `astro build`.
+  // Agent-initiated edits aren't tracked here today — they run inside the
+  // chat panel's own loop, not this iframe's `useCallTool` calls. Wiring
+  // them up would need a `building` tri-state on `last_build_status` plus
+  // a polling cadence; deferred for a follow-up.
+  const isRebuilding =
+    undoTool.isPending || revertFileTool.isPending || publishTool.isPending;
 
   return (
     <div
@@ -387,7 +408,7 @@ function AstroEditor() {
           disabled={undoTool.isPending || !pending || pending.count === 0}
           style={ghostBtn(border, fg, undoTool.isPending || !pending || pending.count === 0)}
         >
-          Undo
+          {undoTool.isPending ? "Undoing…" : "Undo"}
         </button>
         <button
           onClick={handlePublish}
@@ -420,6 +441,11 @@ function AstroEditor() {
           border={border}
           muted={muted}
           fg={fg}
+          successFg={successFg}
+          infoFg={infoFg}
+          dangerFg={dangerFg}
+          warningFg={warningFg}
+          accent={accent}
         />
       )}
 
@@ -482,19 +508,34 @@ function AstroEditor() {
           ) : status?.preview_url ? (
             <>
               <ScaledPreview
-                src={`${status.preview_url}?_=${iframeStamp}`}
+                src={buildPreviewSrc(status.preview_url, currentPage?.path, iframeStamp)}
                 iframeKey={iframeStamp}
                 bg={bg}
                 proxyPrefix={status.preview_url}
                 onNavigate={setCurrentPage}
               />
-              {status.last_build_status === "failed" && status.last_build_error && (
-                <BuildErrorBanner
-                  error={status.last_build_error}
-                  onRevert={handleUndo}
-                  isReverting={undoTool.isPending}
+              {isRebuilding && (
+                <RebuildingOverlay
+                  bg={bg}
+                  fg={fg}
+                  muted={muted}
+                  accent={accent}
+                  border={border}
                 />
               )}
+              {!isRebuilding &&
+                status.last_build_status === "failed" &&
+                status.last_build_error && (
+                  <BuildErrorBanner
+                    error={status.last_build_error}
+                    onRevert={handleUndo}
+                    isReverting={undoTool.isPending}
+                    dangerBg={dangerBg}
+                    dangerBorder={dangerBorder}
+                    dangerFg={dangerFg}
+                    bg={bg}
+                  />
+                )}
             </>
           ) : (
             <CenterMessage muted={muted}>
@@ -600,6 +641,11 @@ function ChangedFilesList({
   border,
   muted,
   fg,
+  successFg,
+  infoFg,
+  dangerFg,
+  warningFg,
+  accent,
 }: {
   changedFiles: ChangedFilesResult;
   onRevertFile: (path: string) => void;
@@ -607,6 +653,11 @@ function ChangedFilesList({
   border: string;
   muted: string;
   fg: string;
+  successFg: string;
+  infoFg: string;
+  dangerFg: string;
+  warningFg: string;
+  accent: string;
 }) {
   return (
     <div
@@ -629,7 +680,15 @@ function ChangedFilesList({
             borderBottom: `1px solid ${border}`,
           }}
         >
-          <StatusBadge status={f.status} muted={muted} />
+          <StatusBadge
+            status={f.status}
+            muted={muted}
+            successFg={successFg}
+            infoFg={infoFg}
+            dangerFg={dangerFg}
+            warningFg={warningFg}
+            accent={accent}
+          />
           <code
             style={{
               flex: 1,
@@ -659,19 +718,32 @@ function ChangedFilesList({
 function StatusBadge({
   status,
   muted,
+  successFg,
+  infoFg,
+  dangerFg,
+  warningFg,
+  accent,
 }: {
   status: ChangedFile["status"];
   muted: string;
+  successFg: string;
+  infoFg: string;
+  dangerFg: string;
+  warningFg: string;
+  accent: string;
 }) {
   // Single-letter badge that mirrors `git status --short` so it's familiar
   // to anyone who's used git: A added, M modified, D deleted, R renamed,
   // T type changed.
+  // Colors come from Synapse's semantic theme tokens, so dark-mode hosts
+  // get the dark-mode equivalents and brand-customised hosts inherit
+  // their palette. Renamed (no semantic match) reuses the host's accent.
   const map: Record<ChangedFile["status"], { letter: string; color: string }> = {
-    added: { letter: "A", color: "#16a34a" },
-    modified: { letter: "M", color: "#2563eb" },
-    deleted: { letter: "D", color: "#dc2626" },
-    renamed: { letter: "R", color: "#9333ea" },
-    type_changed: { letter: "T", color: "#ca8a04" },
+    added: { letter: "A", color: successFg },
+    modified: { letter: "M", color: infoFg },
+    deleted: { letter: "D", color: dangerFg },
+    renamed: { letter: "R", color: accent },
+    type_changed: { letter: "T", color: warningFg },
     other: { letter: "?", color: muted },
   };
   const { letter, color } = map[status];
@@ -710,6 +782,30 @@ function StatusBadge({
  *     out-of-the-box choice.
  */
 const PREVIEW_DESIGN_WIDTH = 1280;
+
+/**
+ * Build the iframe `src` so refresh stays on whatever page the user was on.
+ *
+ * Without this, every rebuild reloads `preview_url` (the root), and the
+ * user gets yanked back to the homepage every time the agent edits — a
+ * jarring break in a workflow that's mostly "look at this page, change
+ * one word, look again."
+ *
+ * `currentPath` comes from the inner iframe's last navigation event
+ * (Sprint 1.5 visible-state push). When it's null (boot, before first
+ * load completes), default to "/". The cache-buster query param forces
+ * the browser to actually re-fetch the new build instead of serving the
+ * cached previous one.
+ */
+function buildPreviewSrc(
+  previewUrl: string,
+  currentPath: string | null | undefined,
+  cacheBust: number,
+): string {
+  const base = (previewUrl ?? "/").replace(/\/$/, "");
+  const path = currentPath && currentPath.startsWith("/") ? currentPath : "/";
+  return `${base}${path}?_=${cacheBust}`;
+}
 
 function ScaledPreview({
   src,
@@ -978,10 +1074,18 @@ function BuildErrorBanner({
   error,
   onRevert,
   isReverting,
+  dangerBg,
+  dangerBorder,
+  dangerFg,
+  bg,
 }: {
   error: string;
   onRevert: () => void;
   isReverting: boolean;
+  dangerBg: string;
+  dangerBorder: string;
+  dangerFg: string;
+  bg: string;
 }) {
   // Astro build errors are usually multi-line, with the last few lines being
   // the actionable bit (file + line + reason). Show them all but cap height.
@@ -992,15 +1096,14 @@ function BuildErrorBanner({
         top: 0,
         left: 0,
         right: 0,
-        background: "#fef2f2",
-        borderBottom: "1px solid #fecaca",
-        color: "#991b1b",
+        background: dangerBg,
+        borderBottom: `1px solid ${dangerBorder}`,
+        color: dangerFg,
         padding: ".55rem .85rem",
         fontSize: ".78rem",
         display: "flex",
         gap: ".75rem",
         alignItems: "flex-start",
-        boxShadow: "0 2px 6px rgba(153, 27, 27, .08)",
         zIndex: 10,
       }}
     >
@@ -1029,9 +1132,9 @@ function BuildErrorBanner({
           flexShrink: 0,
           padding: ".3rem .65rem",
           borderRadius: 4,
-          border: "1px solid #fecaca",
-          background: "#fff",
-          color: "#991b1b",
+          border: `1px solid ${dangerBorder}`,
+          background: bg,
+          color: dangerFg,
           fontSize: ".75rem",
           cursor: isReverting ? "wait" : "pointer",
           opacity: isReverting ? 0.6 : 1,
@@ -1040,6 +1143,61 @@ function BuildErrorBanner({
       >
         {isReverting ? "Reverting…" : "Revert last edit"}
       </button>
+    </div>
+  );
+}
+
+function RebuildingOverlay({
+  bg,
+  fg,
+  muted,
+  accent,
+  border,
+}: {
+  bg: string;
+  fg: string;
+  muted: string;
+  accent: string;
+  border: string;
+}) {
+  // Full-pane semi-transparent overlay during the 5–30s `astro build`. The
+  // preview iframe behind shows the previous successful build, so the user
+  // sees the BEFORE state with a clear "we're working on it" signal.
+  return (
+    <div
+      role="status"
+      aria-live="polite"
+      style={{
+        position: "absolute",
+        inset: 0,
+        background: `${bg}cc`,
+        backdropFilter: "blur(2px)",
+        display: "flex",
+        flexDirection: "column",
+        alignItems: "center",
+        justifyContent: "center",
+        gap: ".5rem",
+        zIndex: 20,
+        pointerEvents: "auto",
+      }}
+    >
+      <div
+        style={{
+          width: 28,
+          height: 28,
+          borderRadius: "50%",
+          border: `2px solid ${border}`,
+          borderTopColor: accent,
+          animation: "nb-spin 0.7s linear infinite",
+        }}
+      />
+      <div style={{ color: fg, fontSize: ".85rem", fontWeight: 500 }}>
+        Rebuilding preview…
+      </div>
+      <div style={{ color: muted, fontSize: ".72rem" }}>
+        Astro builds usually finish in a few seconds.
+      </div>
+      <style>{"@keyframes nb-spin { to { transform: rotate(360deg); } }"}</style>
     </div>
   );
 }

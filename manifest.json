@@ -1,7 +1,7 @@
 {
   "manifest_version": "0.4",
   "name": "@nimblebraininc/synapse-astro-editor",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Natural-language editor for Astro websites. Point the agent at a GitHub repo; chat drives every edit (text, JSX, blog posts, image uploads). The bundle clones the repo, runs astro build+preview, serves the live site through a same-origin proxy, auto-commits each edit, and publishes by squash-merging into the base branch.",
   "author": {
     "name": "NimbleBrain Inc",

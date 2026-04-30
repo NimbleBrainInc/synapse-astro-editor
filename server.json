@@ -2,7 +2,7 @@
   "$schema": "https://schemas.nimblebrain.ai/v1/nimblebrain-server.schema.json",
   "name": "ai.nimblebrain/synapse-astro-editor",
   "description": "Natural-language editor for Astro websites. Chat-driven edits to text, JSX, blog posts, and image assets, with a live same-origin preview, auto-commit-per-edit on a draft branch, and one-click publish via squash-merge.",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "title": "Astro Editor",
   "repository": {
     "url": "https://github.com/NimbleBrainInc/synapse-astro-editor",

@@ -708,7 +708,7 @@ function AstroEditor() {
             </>
           ) : (
             <CenterMessage muted={muted}>
-              No preview URL — check that the http-proxy declaration is wired.
+              Preview not available — the host hasn't provided a public URL for this bundle.
             </CenterMessage>
           )}
         </main>

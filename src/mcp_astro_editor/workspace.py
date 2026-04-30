@@ -164,6 +164,16 @@ async def ensure_workspace() -> Path:
         # Remove token from the stored remote URL.
         await _git("remote", "set-url", "origin", cfg.repo_url, cwd=repo_dir)
 
+    # Set local git identity so auto_commit() in tools/git_ops.py doesn't fail
+    # with "Author identity unknown" the first time edit_file/write_file runs.
+    # Without this, the file write succeeds, the commit fails, the bundle's
+    # auto-rebuild never fires, and the agent sees an opaque error while the
+    # workspace silently lands in a half-applied state. Set unconditionally
+    # (idempotent) so existing clones from before this fix self-heal on next
+    # ensure_workspace() call.
+    await _git("config", "user.email", "agent@nimblebrain.ai", cwd=repo_dir)
+    await _git("config", "user.name", "NimbleBrain Agent", cwd=repo_dir)
+
     # Token lives in the extraheader, not in .git/config — gets threaded
     # through on every fetch/push so it stays off disk.
     await _git(

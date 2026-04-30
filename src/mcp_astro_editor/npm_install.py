@@ -12,6 +12,8 @@ import os
 import sys
 from pathlib import Path
 
+from .spawn import create_subprocess_exec
+
 
 async def ensure_node_modules(repo_path: Path, timeout_s: float = 600.0) -> str:
     """Returns one of: "skipped", "already_installed", "installed"."""
@@ -24,7 +26,7 @@ async def ensure_node_modules(repo_path: Path, timeout_s: float = 600.0) -> str:
     cmd = ["npm", "ci"] if has_lock else ["npm", "install"]
     print(f"[npm] running `{' '.join(cmd)}` in {repo_path}", file=sys.stderr)
 
-    proc = await asyncio.create_subprocess_exec(
+    proc = await create_subprocess_exec(
         *cmd,
         cwd=str(repo_path),
         stdin=asyncio.subprocess.DEVNULL,

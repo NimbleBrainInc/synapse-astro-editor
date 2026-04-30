@@ -38,6 +38,8 @@ from pathlib import Path
 
 import httpx
 
+from .spawn import create_subprocess_exec
+
 DEFAULT_PORT = 4321
 STARTUP_TIMEOUT_S = 30.0
 HEALTH_INTERVAL_S = 0.5
@@ -85,7 +87,7 @@ class AstroRuntime:
         if self.base_override:
             cmd += ["--base", self.base_override]
         print(f"[astro] building: {' '.join(cmd)} (cwd={self.repo_path})", file=sys.stderr)
-        proc = await asyncio.create_subprocess_exec(
+        proc = await create_subprocess_exec(
             *cmd,
             cwd=self.repo_path,
             stdin=asyncio.subprocess.DEVNULL,
@@ -112,7 +114,7 @@ class AstroRuntime:
         if self.base_override:
             cmd += ["--base", self.base_override]
         print(f"[astro] starting preview: {' '.join(cmd)} (cwd={self.repo_path})", file=sys.stderr)
-        self.process = await asyncio.create_subprocess_exec(
+        self.process = await create_subprocess_exec(
             *cmd,
             cwd=self.repo_path,
             stdin=asyncio.subprocess.DEVNULL,

@@ -28,6 +28,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import urlparse, urlunparse
 
+from .spawn import create_subprocess_exec
+
 
 class WorkspaceError(RuntimeError):
     """Anything that prevents the workspace from being ready."""
@@ -106,7 +108,7 @@ def workspace_root() -> Path:
 
 async def _git(*args: str, cwd: Path | None = None) -> str:
     """Run git; raise WorkspaceError on failure with token scrubbed from output."""
-    proc = await asyncio.create_subprocess_exec(
+    proc = await create_subprocess_exec(
         "git",
         *args,
         cwd=str(cwd) if cwd else None,

@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import sys
 
+from ..spawn import create_subprocess_exec
 from ..state import SESSION
 from ..workspace import _scrub_token, load_config
 from .files import NoRepoError
@@ -22,7 +23,7 @@ async def _git(*args: str, auth: bool = False) -> str:
         cfg = load_config()
         cmd += ["-c", f"http.extraheader={cfg.http_extraheader}"]
     cmd += list(args)
-    proc = await asyncio.create_subprocess_exec(
+    proc = await create_subprocess_exec(
         *cmd,
         cwd=str(SESSION.repo_path),
         stdin=asyncio.subprocess.DEVNULL,

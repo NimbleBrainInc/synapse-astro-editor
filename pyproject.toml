@@ -1,6 +1,6 @@
 [project]
 name = "mcp-astro-editor"
-version = "0.1.1"
+version = "0.1.2"
 description = "Natural-language editor for Astro websites"
 readme = "README.md"
 license = { text = "MIT" }

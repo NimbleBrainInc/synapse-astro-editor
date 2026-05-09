@@ -1,7 +1,7 @@
 {
   "manifest_version": "0.4",
   "name": "@nimblebraininc/synapse-astro-editor",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Natural-language editor for Astro websites. Point the agent at a GitHub repo; chat drives every edit (text, JSX, blog posts, image uploads). The bundle clones the repo, runs astro build+preview, serves the live site through a same-origin proxy, auto-commits each edit, and publishes by squash-merging into the base branch.",
   "author": {
     "name": "NimbleBrain Inc",
@@ -81,20 +81,62 @@
     }
   },
   "tools": [
-    { "name": "boot", "description": "Run the full startup sequence (clone, npm install, start Astro, scan, initial render). Idempotent." },
-    { "name": "get_workspace_status", "description": "Lightweight workspace probe — config, clone state, current branch, runtime status." },
-    { "name": "get_site_profile", "description": "Return the cached Astro site profile (config presence, collections, pages, components, layouts)." },
-    { "name": "read_file", "description": "Read a file from the repo workspace." },
-    { "name": "edit_file", "description": "Replace a unique occurrence of old_string with new_string in a file. Auto-commits to the draft branch." },
-    { "name": "write_file", "description": "Write a file in the repo workspace (create or overwrite). Auto-commits to the draft branch." },
-    { "name": "list_dir", "description": "List entries in a directory within the repo workspace." },
-    { "name": "grep", "description": "Search for a regex pattern across the repo workspace." },
-    { "name": "render_preview", "description": "Render a page through the internal Astro dev server, flatten its assets, and cache it." },
-    { "name": "get_preview_html", "description": "Return the cached flattened HTML for a previously rendered page (used by the UI for srcdoc)." },
-    { "name": "list_pending_changes", "description": "Return commits on the draft branch that haven't been published yet." },
-    { "name": "revert_change", "description": "Revert a specific commit on the draft branch by sha." },
-    { "name": "undo_last_change", "description": "Revert the most recent commit on the draft branch." },
-    { "name": "publish", "description": "Publish accumulated draft changes. Default: squash-merge into base and push base. PR mode opens a review PR instead." }
+    {
+      "name": "boot",
+      "description": "Run the full startup sequence (clone, npm install, start Astro, scan, initial render). Idempotent."
+    },
+    {
+      "name": "get_workspace_status",
+      "description": "Lightweight workspace probe — config, clone state, current branch, runtime status."
+    },
+    {
+      "name": "get_site_profile",
+      "description": "Return the cached Astro site profile (config presence, collections, pages, components, layouts)."
+    },
+    {
+      "name": "read_file",
+      "description": "Read a file from the repo workspace."
+    },
+    {
+      "name": "edit_file",
+      "description": "Replace a unique occurrence of old_string with new_string in a file. Auto-commits to the draft branch."
+    },
+    {
+      "name": "write_file",
+      "description": "Write a file in the repo workspace (create or overwrite). Auto-commits to the draft branch."
+    },
+    {
+      "name": "list_dir",
+      "description": "List entries in a directory within the repo workspace."
+    },
+    {
+      "name": "grep",
+      "description": "Search for a regex pattern across the repo workspace."
+    },
+    {
+      "name": "render_preview",
+      "description": "Render a page through the internal Astro dev server, flatten its assets, and cache it."
+    },
+    {
+      "name": "get_preview_html",
+      "description": "Return the cached flattened HTML for a previously rendered page (used by the UI for srcdoc)."
+    },
+    {
+      "name": "list_pending_changes",
+      "description": "Return commits on the draft branch that haven't been published yet."
+    },
+    {
+      "name": "revert_change",
+      "description": "Revert a specific commit on the draft branch by sha."
+    },
+    {
+      "name": "undo_last_change",
+      "description": "Revert the most recent commit on the draft branch."
+    },
+    {
+      "name": "publish",
+      "description": "Publish accumulated draft changes. Default: squash-merge into base and push base. PR mode opens a review PR instead."
+    }
   ],
   "_meta": {
     "org.mpaktrust": {
